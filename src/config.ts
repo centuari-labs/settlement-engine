@@ -28,6 +28,21 @@ const configSchema = z.object({
     .transform((value) => Number(value || 10000))
     .pipe(z.number().int().positive())
     .default('10000'),
+  SETTLEMENT_BATCH_SIZE: z
+    .string()
+    .transform((value) => Number(value || 10))
+    .pipe(z.number().int().positive())
+    .default('10'),
+  SETTLEMENT_BATCH_INTERVAL_MS: z
+    .string()
+    .transform((value) => Number(value || 5000))
+    .pipe(z.number().int().positive())
+    .default('5000'),
+  SETTLEMENT_POLL_INTERVAL_MS: z
+    .string()
+    .transform((value) => Number(value || 200))
+    .pipe(z.number().int().positive())
+    .default('200'),
 });
 
 export type AppConfig = {
@@ -38,6 +53,9 @@ export type AppConfig = {
   readonly readBlockMs: number;
   readonly readCount: number;
   readonly streamMaxLen: number;
+  readonly batchSize: number;
+  readonly batchIntervalMs: number;
+  readonly pollIntervalMs: number;
 };
 
 /**
@@ -54,6 +72,9 @@ export const loadConfig = (): AppConfig => {
     readBlockMs: parsed.REDIS_READ_BLOCK_MS,
     readCount: parsed.REDIS_READ_COUNT,
     streamMaxLen: parsed.REDIS_STREAM_MAXLEN,
+    batchSize: parsed.SETTLEMENT_BATCH_SIZE,
+    batchIntervalMs: parsed.SETTLEMENT_BATCH_INTERVAL_MS,
+    pollIntervalMs: parsed.SETTLEMENT_POLL_INTERVAL_MS,
   };
 };
 

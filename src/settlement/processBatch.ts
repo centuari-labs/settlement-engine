@@ -1,5 +1,7 @@
 import type Redis from 'ioredis';
 import type { MatchWithMeta } from '../redis/settlementMatchConsumer';
+import { settleBatch, type SettlementError } from './smartContract';
+import { persistSettlementResults, type DatabaseError } from './database';
 
 /**
  * Context for batch settlement processing that provides access to Redis and
@@ -15,28 +17,61 @@ export interface SettlementBatchContext {
    */
   readonly stream: string;
   /**
+   * Consumer group name for ACKing entries.
+   */
+  readonly consumerGroup: string;
+  /**
    * Maximum number of entries to keep in the stream after trimming.
    */
   readonly streamMaxLen: number;
 }
 
 /**
- * Placeholder for future batch settlement processing.
+ * Error that occurred during batch processing.
+ */
+export class BatchProcessingError extends Error {
+  /**
+   * Whether the error is retryable.
+   */
+  readonly retryable: boolean;
+  /**
+   * Original error that caused the failure.
+   */
+  readonly originalError: unknown;
+
+  constructor(message: string, retryable: boolean, originalError: unknown) {
+    super(message);
+    this.name = 'BatchProcessingError';
+    this.retryable = retryable;
+    this.originalError = originalError;
+  }
+}
+
+/**
+ * Process a batch of settlement matches.
  *
- * This is where we will:
- * - Group matches into batches.
- * - Call the on-chain Settlement smart contract.
- * - Persist settlement results to the database.
+ * This function:
+ * 1. Calls the smart contract to settle the batch
+ * 2. Persists settlement results to the database
+ * 3. Only ACKs and deletes stream entries after successful settlement
  *
- * For now this simply logs the matches for observability.
+ * If any step fails, the entries remain in pending state for retry.
+ *
+ * @param matches - Array of matches to process in the batch.
+ * @param context - Context providing Redis client and stream configuration.
+ * @throws BatchProcessingError if settlement fails (entries remain pending).
  */
 export const processSettlementBatch = async (
   matches: readonly MatchWithMeta[],
   context: SettlementBatchContext,
 ): Promise<void> => {
+  if (matches.length === 0) {
+    return;
+  }
+
   // eslint-disable-next-line no-console
   console.log(
-    `[process-settlement-batch] Received batch of ${matches.length} matches`,
+    `[process-settlement-batch] Processing batch of ${matches.length} matches`,
     matches.map((match) => ({
       id: match.id,
       matchId: match.payload.matchId,
@@ -45,16 +80,92 @@ export const processSettlementBatch = async (
     })),
   );
 
-  // In the future, real settlement logic (on-chain calls, persistence, etc.)
-  // will run here. Only after successful settlement do we delete entries and
-  // trim the stream.
+  let settlementResult;
+  try {
+    // Step 1: Call smart contract to settle the batch
+    const startTime = Date.now();
+    settlementResult = await settleBatch({
+      matches: matches.map((m) => m.payload),
+    });
+    const duration = Date.now() - startTime;
 
-  if (matches.length === 0) {
-    return;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[process-settlement-batch] Smart contract settlement successful`,
+      {
+        transactionHash: settlementResult.transactionHash,
+        blockNumber: settlementResult.blockNumber,
+        gasUsed: settlementResult.gasUsed,
+        duration,
+        matchCount: matches.length,
+      },
+    );
+  } catch (error) {
+    const settlementError = error as SettlementError;
+    const isRetryable =
+      settlementError.retryable !== undefined
+        ? settlementError.retryable
+        : true;
+
+    // eslint-disable-next-line no-console
+    console.error(
+      `[process-settlement-batch] Smart contract settlement failed`,
+      {
+        error: settlementError.message,
+        code: settlementError.code,
+        retryable: isRetryable,
+        matchCount: matches.length,
+      },
+    );
+
+    throw new BatchProcessingError(
+      `Smart contract settlement failed: ${settlementError.message}`,
+      isRetryable,
+      error,
+    );
   }
 
-  // Group entry IDs by stream so we can delete them efficiently, in case
-  // multiple streams are ever supported.
+  try {
+    // Step 2: Persist settlement results to database
+    const startTime = Date.now();
+    await persistSettlementResults({
+      results: [settlementResult],
+    });
+    const duration = Date.now() - startTime;
+
+    // eslint-disable-next-line no-console
+    console.log(
+      `[process-settlement-batch] Database persistence successful`,
+      {
+        duration,
+        matchCount: matches.length,
+      },
+    );
+  } catch (error) {
+    const dbError = error as DatabaseError;
+    const isRetryable =
+      dbError.retryable !== undefined ? dbError.retryable : true;
+
+    // eslint-disable-next-line no-console
+    console.error(
+      `[process-settlement-batch] Database persistence failed`,
+      {
+        error: dbError.message,
+        code: dbError.code,
+        retryable: isRetryable,
+        matchCount: matches.length,
+      },
+    );
+
+    throw new BatchProcessingError(
+      `Database persistence failed: ${dbError.message}`,
+      isRetryable,
+      error,
+    );
+  }
+
+  // Step 3: Only ACK and delete entries after successful settlement
+  // Group entry IDs by stream so we can ACK and delete them efficiently
   const idsByStream = new Map<string, string[]>();
   for (const match of matches) {
     const ids = idsByStream.get(match.stream) ?? [];
@@ -62,14 +173,21 @@ export const processSettlementBatch = async (
     idsByStream.set(match.stream, ids);
   }
 
+  // ACK all entries in the batch
+  for (const [stream, ids] of idsByStream.entries()) {
+    for (const id of ids) {
+      await context.redis.xack(stream, context.consumerGroup, id);
+    }
+  }
+
   // Delete successfully processed entries from their respective streams.
   // Batch deletions to avoid potential Redis argument limits (typically 1000+ args)
   // and to handle large batches more efficiently.
-  const BATCH_SIZE = 100;
+  const DELETE_BATCH_SIZE = 100;
   for (const [stream, ids] of idsByStream.entries()) {
     // Process deletions in batches to avoid hitting Redis argument limits
-    for (let i = 0; i < ids.length; i += BATCH_SIZE) {
-      const batch = ids.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < ids.length; i += DELETE_BATCH_SIZE) {
+      const batch = ids.slice(i, i + DELETE_BATCH_SIZE);
       await context.redis.xdel(stream, ...batch);
     }
   }
@@ -81,6 +199,15 @@ export const processSettlementBatch = async (
     'MAXLEN',
     '~',
     context.streamMaxLen,
+  );
+
+  // eslint-disable-next-line no-console
+  console.log(
+    `[process-settlement-batch] Batch processing complete`,
+    {
+      matchCount: matches.length,
+      transactionHash: settlementResult.transactionHash,
+    },
   );
 };
 

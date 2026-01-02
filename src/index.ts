@@ -4,39 +4,66 @@ import { loadConfig } from './config';
 import { getRedisClient, closeRedisClient } from './redis/client';
 import {
   ensureConsumerGroup,
-  startSettlementMatchConsumer,
-  type MatchWithMeta,
+  processPendingEntriesOnStartup,
+  type ReadMatchesOptions,
 } from './redis/settlementMatchConsumer';
-import { processSettlementBatch } from './settlement/processBatch';
+import { BatchAccumulator } from './settlement/batchAccumulator';
+import { BatchProcessor } from './settlement/batchProcessor';
 
 const main = async (): Promise<void> => {
   const config = loadConfig();
   const redis = getRedisClient(config);
 
-  // Ensure the consumer group exists before starting the loop.
+  // Ensure the consumer group exists before starting.
   await ensureConsumerGroup(
     redis,
     config.settlementMatchesStream,
     config.consumerGroup,
   );
 
-  // For now we process matches one-by-one but route them through a batch-aware API
-  // so we can easily switch to true batching later. After a successful batch
-  // (currently size 1), we delete the corresponding stream entries and apply
-  // bounded stream trimming inside processSettlementBatch.
-  const onMatch = async (match: MatchWithMeta): Promise<void> => {
-    await processSettlementBatch([match], {
-      redis,
-      stream: config.settlementMatchesStream,
-      streamMaxLen: config.streamMaxLen,
-    });
+  // Create batch accumulator
+  const accumulator = new BatchAccumulator(
+    config.batchSize,
+    config.batchIntervalMs,
+  );
+
+  // Process pending entries on startup and add them to accumulator
+  const readMatchesOptions: ReadMatchesOptions = {
+    redis,
+    stream: config.settlementMatchesStream,
+    consumerGroup: config.consumerGroup,
+    consumerName: config.consumerName,
+    readCount: config.readCount,
   };
 
-  const stopConsumer = startSettlementMatchConsumer({
+  try {
+    const pendingMatches = await processPendingEntriesOnStartup(
+      readMatchesOptions,
+    );
+    if (pendingMatches.length > 0) {
+      accumulator.addMatches(pendingMatches);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[settlement-engine] Processed ${pendingMatches.length} pending matches on startup`,
+      );
+    }
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(
+      '[settlement-engine] Error processing pending entries on startup',
+      error,
+    );
+    // Continue anyway - pending entries will be reclaimed later
+  }
+
+  // Create and start batch processor
+  const batchProcessor = new BatchProcessor({
     redis,
     config,
-    onMatch,
+    accumulator,
   });
+
+  batchProcessor.start();
 
   // eslint-disable-next-line no-console
   console.log(
@@ -46,13 +73,22 @@ const main = async (): Promise<void> => {
     config.consumerGroup,
     'consumer:',
     config.consumerName,
+    'batch-size:',
+    config.batchSize,
+    'batch-interval-ms:',
+    config.batchIntervalMs,
   );
 
   const shutdown = async (signal: string): Promise<void> => {
     // eslint-disable-next-line no-console
     console.log(`[settlement-engine] Received ${signal}, shutting down...`);
-    stopConsumer();
+
+    // Stop batch processor (will process pending batches)
+    await batchProcessor.stop();
+
+    // Close Redis connection
     await closeRedisClient();
+
     // eslint-disable-next-line no-console
     console.log('[settlement-engine] Shutdown complete');
     process.exit(0);

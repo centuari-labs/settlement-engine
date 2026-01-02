@@ -1,6 +1,5 @@
 import type Redis from 'ioredis';
 import { matchSchema, type Match } from '../schemas/match';
-import type { AppConfig } from '../config';
 
 type StreamEntry = [string, string[]];
 type StreamReadResult = [string, StreamEntry[]][];
@@ -11,16 +10,32 @@ export interface MatchWithMeta {
   readonly payload: Match;
 }
 
-export interface SettlementMatchConsumerOptions {
-  readonly redis: Redis;
-  readonly config: AppConfig;
+/**
+ * Options for reading matches from Redis stream.
+ */
+export interface ReadMatchesOptions {
   /**
-   * Handler invoked for each valid match.
-   * For now this can log or perform simple side effects; later we will batch.
+   * Redis client.
    */
-  readonly onMatch: (match: MatchWithMeta) => Promise<void>;
+  readonly redis: Redis;
   /**
-   * Optional handler for invalid messages that fail validation.
+   * Stream name.
+   */
+  readonly stream: string;
+  /**
+   * Consumer group name.
+   */
+  readonly consumerGroup: string;
+  /**
+   * Consumer name.
+   */
+  readonly consumerName: string;
+  /**
+   * Maximum number of entries to read per call.
+   */
+  readonly readCount: number;
+  /**
+   * Optional handler for invalid entries.
    */
   readonly onInvalid?: (args: {
     readonly id: string;
@@ -133,23 +148,22 @@ const parseMatchEntry = (
 
 /**
  * Process a single entry from a stream.
- * Handles parsing, validation, and invokes appropriate handlers.
+ * Handles parsing, validation, and returns the match if valid.
  *
  * @param entry - Stream entry to process.
  * @param stream - Stream name.
  * @param consumerGroup - Consumer group name.
  * @param redis - Redis client.
- * @param onMatch - Handler for valid matches.
  * @param onInvalid - Optional handler for invalid entries.
+ * @returns MatchWithMeta if valid, null if invalid (and ACKed).
  */
 const processEntry = async (
   entry: StreamEntry,
   stream: string,
   consumerGroup: string,
   redis: Redis,
-  onMatch: (match: MatchWithMeta) => Promise<void>,
-  onInvalid?: SettlementMatchConsumerOptions['onInvalid'],
-): Promise<void> => {
+  onInvalid?: ReadMatchesOptions['onInvalid'],
+): Promise<MatchWithMeta | null> => {
   const parsed = parseMatchEntry(entry);
   const id = entry[0];
   const rawFields = fieldsArrayToObject(entry[1]);
@@ -170,8 +184,9 @@ const processEntry = async (
       );
     }
 
+    // ACK invalid entries immediately to avoid blocking
     await redis.xack(stream, consumerGroup, id);
-    return;
+    return null;
   }
 
   const matchWithMeta: MatchWithMeta = {
@@ -180,8 +195,89 @@ const processEntry = async (
     payload: parsed.value,
   };
 
-  await onMatch(matchWithMeta);
-  await redis.xack(stream, consumerGroup, id);
+  // Return match (ACK will happen after successful batch processing)
+  return matchWithMeta;
+};
+
+/**
+ * Read matches from Redis stream using non-blocking XREADGROUP.
+ * Entries are assigned to the consumer but not ACKed (ACK happens after successful batch processing).
+ *
+ * @param options - Options for reading matches.
+ * @returns Array of valid matches (invalid entries are ACKed immediately).
+ */
+export const readMatches = async (
+  options: ReadMatchesOptions,
+): Promise<MatchWithMeta[]> => {
+  const { redis, stream, consumerGroup, consumerName, readCount, onInvalid } =
+    options;
+
+  try {
+    // Use XREADGROUP with BLOCK 0 (non-blocking) to read new entries
+    const result = (await (redis.xreadgroup as (
+      ...args: (string | number)[]
+    ) => Promise<StreamReadResult | null>)(
+      'GROUP',
+      consumerGroup,
+      consumerName,
+      'BLOCK',
+      0, // Non-blocking
+      'COUNT',
+      readCount,
+      'STREAMS',
+      stream,
+      '>',
+    )) as StreamReadResult | null;
+
+    if (!result || result.length === 0) {
+      return [];
+    }
+
+    const matches: MatchWithMeta[] = [];
+
+    for (const [streamName, entries] of result) {
+      for (const entry of entries) {
+        const parsed = parseMatchEntry(entry);
+        const id = entry[0];
+        const rawFields = fieldsArrayToObject(entry[1]);
+
+        if (!parsed) {
+          if (onInvalid) {
+            await onInvalid({
+              id,
+              stream: streamName,
+              raw: rawFields,
+              error: new Error('Validation failed for match entry'),
+            });
+          } else {
+            // eslint-disable-next-line no-console
+            console.error(
+              '[settlement-consumer] Invalid match entry',
+              JSON.stringify({ stream: streamName, id, raw: rawFields }),
+            );
+          }
+
+          // ACK invalid entries immediately to avoid blocking
+          await redis.xack(streamName, consumerGroup, id);
+          continue;
+        }
+
+        const matchWithMeta: MatchWithMeta = {
+          id: parsed.id,
+          stream: streamName,
+          payload: parsed.value,
+        };
+
+        matches.push(matchWithMeta);
+      }
+    }
+
+    return matches;
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('[settlement-consumer] Error reading matches', error);
+    return [];
+  }
 };
 
 /**
@@ -193,8 +289,8 @@ const processEntry = async (
  * @param consumerGroup - Consumer group name.
  * @param consumerName - Current consumer name.
  * @param readCount - Maximum number of entries to read per batch.
- * @param onMatch - Handler for valid matches.
  * @param onInvalid - Optional handler for invalid entries.
+ * @returns Array of valid matches from pending entries.
  */
 const processPendingEntries = async (
   redis: Redis,
@@ -202,9 +298,9 @@ const processPendingEntries = async (
   consumerGroup: string,
   consumerName: string,
   readCount: number,
-  onMatch: (match: MatchWithMeta) => Promise<void>,
-  onInvalid?: SettlementMatchConsumerOptions['onInvalid'],
-): Promise<void> => {
+  onInvalid?: ReadMatchesOptions['onInvalid'],
+): Promise<MatchWithMeta[]> => {
+  const matches: MatchWithMeta[] = [];
   // First, process pending entries for the current consumer using XREADGROUP with '0'
   let hasMorePending = true;
   while (hasMorePending) {
@@ -239,7 +335,16 @@ const processPendingEntries = async (
         totalEntriesProcessed += entries.length;
 
         for (const entry of entries) {
-          await processEntry(entry, streamName, consumerGroup, redis, onMatch, onInvalid);
+          const match = await processEntry(
+            entry,
+            streamName,
+            consumerGroup,
+            redis,
+            onInvalid,
+          );
+          if (match) {
+            matches.push(match);
+          }
         }
       }
 
@@ -318,7 +423,16 @@ const processPendingEntries = async (
 
       // Process claimed entries
       for (const entry of claimedEntries) {
-        await processEntry(entry, stream, consumerGroup, redis, onMatch, onInvalid);
+        const match = await processEntry(
+          entry,
+          stream,
+          consumerGroup,
+          redis,
+          onInvalid,
+        );
+        if (match) {
+          matches.push(match);
+        }
       }
 
       // If we got fewer entries than readCount, we've processed all stale entries
@@ -331,93 +445,32 @@ const processPendingEntries = async (
       hasMoreStaleEntries = false;
     }
   }
+
+  return matches;
 };
 
 /**
- * Start a long-running loop that consumes settlement matches from Redis.
- * This uses XREADGROUP with BLOCK, and should be stopped via the returned
- * `stop` function.
+ * Process pending entries on startup and return them as matches.
+ * This should be called before starting batch processing to handle any
+ * pending entries from previous runs.
+ *
+ * @param options - Options for processing pending entries.
+ * @returns Array of valid matches from pending entries.
  */
-export const startSettlementMatchConsumer = (
-  options: SettlementMatchConsumerOptions,
-): (() => void) => {
-  const { redis, config, onMatch, onInvalid } = options;
-  const {
+export const processPendingEntriesOnStartup = async (
+  options: ReadMatchesOptions,
+): Promise<MatchWithMeta[]> => {
+  const { redis, stream, consumerGroup, consumerName, readCount, onInvalid } =
+    options;
+
+  return processPendingEntries(
+    redis,
+    stream,
     consumerGroup,
     consumerName,
-    settlementMatchesStream,
-    readBlockMs,
     readCount,
-  } = config;
-
-  let isRunning = true;
-
-  // Process pending entries before starting the main loop
-  void (async (): Promise<void> => {
-    try {
-      await processPendingEntries(
-        redis,
-        settlementMatchesStream,
-        consumerGroup,
-        consumerName,
-        readCount,
-        onMatch,
-        onInvalid,
-      );
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[settlement-consumer] Error during initial pending entry processing', error);
-      // Continue to start the main loop even if pending processing fails
-    }
-  })();
-
-  const loop = async (): Promise<void> => {
-    // eslint-disable-next-line no-constant-condition
-    while (isRunning) {
-      try {
-        // Use type assertion to work around ioredis v5 type overload resolution
-        const result = (await (redis.xreadgroup as (
-          ...args: (string | number)[]
-        ) => Promise<StreamReadResult | null>)(
-          'GROUP',
-          consumerGroup,
-          consumerName,
-          'BLOCK',
-          readBlockMs,
-          'COUNT',
-          readCount,
-          'STREAMS',
-          settlementMatchesStream,
-          '>',
-        )) as StreamReadResult | null;
-
-        if (!result) {
-          continue;
-        }
-
-        for (const [stream, entries] of result) {
-          for (const entry of entries) {
-            await processEntry(entry, stream, consumerGroup, redis, onMatch, onInvalid);
-          }
-        }
-      } catch (error) {
-        // eslint-disable-next-line no-console
-        console.error('[settlement-consumer] Error in consumer loop', error);
-        // Back off briefly on error to avoid tight error loops.
-        // Also check if we should continue - the connection might be permanently closed
-        if (!isRunning) {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-    }
-  };
-
-  void loop();
-
-  return () => {
-    isRunning = false;
-  };
+    onInvalid,
+  );
 };
 
 
