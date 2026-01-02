@@ -132,6 +132,208 @@ const parseMatchEntry = (
 };
 
 /**
+ * Process a single entry from a stream.
+ * Handles parsing, validation, and invokes appropriate handlers.
+ *
+ * @param entry - Stream entry to process.
+ * @param stream - Stream name.
+ * @param consumerGroup - Consumer group name.
+ * @param redis - Redis client.
+ * @param onMatch - Handler for valid matches.
+ * @param onInvalid - Optional handler for invalid entries.
+ */
+const processEntry = async (
+  entry: StreamEntry,
+  stream: string,
+  consumerGroup: string,
+  redis: Redis,
+  onMatch: (match: MatchWithMeta) => Promise<void>,
+  onInvalid?: SettlementMatchConsumerOptions['onInvalid'],
+): Promise<void> => {
+  const parsed = parseMatchEntry(entry);
+  const id = entry[0];
+  const rawFields = fieldsArrayToObject(entry[1]);
+
+  if (!parsed) {
+    if (onInvalid) {
+      await onInvalid({
+        id,
+        stream,
+        raw: rawFields,
+        error: new Error('Validation failed for match entry'),
+      });
+    } else {
+      // eslint-disable-next-line no-console
+      console.error(
+        '[settlement-consumer] Invalid match entry',
+        JSON.stringify({ stream, id, raw: rawFields }),
+      );
+    }
+
+    await redis.xack(stream, consumerGroup, id);
+    return;
+  }
+
+  const matchWithMeta: MatchWithMeta = {
+    id: parsed.id,
+    stream,
+    payload: parsed.value,
+  };
+
+  await onMatch(matchWithMeta);
+  await redis.xack(stream, consumerGroup, id);
+};
+
+/**
+ * Process pending entries for the current consumer and claim stale entries from other consumers.
+ * This should be called before starting to process new entries.
+ *
+ * @param redis - Redis client.
+ * @param stream - Stream name.
+ * @param consumerGroup - Consumer group name.
+ * @param consumerName - Current consumer name.
+ * @param readCount - Maximum number of entries to read per batch.
+ * @param onMatch - Handler for valid matches.
+ * @param onInvalid - Optional handler for invalid entries.
+ */
+const processPendingEntries = async (
+  redis: Redis,
+  stream: string,
+  consumerGroup: string,
+  consumerName: string,
+  readCount: number,
+  onMatch: (match: MatchWithMeta) => Promise<void>,
+  onInvalid?: SettlementMatchConsumerOptions['onInvalid'],
+): Promise<void> => {
+  // First, process pending entries for the current consumer using XREADGROUP with '0'
+  let hasMorePending = true;
+  while (hasMorePending) {
+    try {
+      // Read pending entries for this consumer (using '0' instead of '>')
+      const result = (await (redis.xreadgroup as (
+        ...args: (string | number)[]
+      ) => Promise<StreamReadResult | null>)(
+        'GROUP',
+        consumerGroup,
+        consumerName,
+        'COUNT',
+        readCount,
+        'STREAMS',
+        stream,
+        '0',
+      )) as StreamReadResult | null;
+
+      if (!result || result.length === 0) {
+        hasMorePending = false;
+        break;
+      }
+
+      let processedAny = false;
+      let totalEntriesProcessed = 0;
+
+      for (const [streamName, entries] of result) {
+        if (entries.length === 0) {
+          continue;
+        }
+        processedAny = true;
+        totalEntriesProcessed += entries.length;
+
+        for (const entry of entries) {
+          await processEntry(entry, streamName, consumerGroup, redis, onMatch, onInvalid);
+        }
+      }
+
+      // If we didn't process any entries, or we got fewer than readCount, we're done
+      if (!processedAny || totalEntriesProcessed < readCount) {
+        hasMorePending = false;
+      }
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('[settlement-consumer] Error processing pending entries', error);
+      hasMorePending = false;
+    }
+  }
+
+  // Second, claim and process stale entries from other consumers
+  // Continue claiming in batches until no more stale entries are available
+  let hasMoreStaleEntries = true;
+  while (hasMoreStaleEntries) {
+    try {
+      // Get pending entry summary
+      // XPENDING returns: [total, start, end, consumers]
+      const pendingInfo = (await (redis.xpending as unknown as (
+        ...args: (string | number)[]
+      ) => Promise<[number, string, string, Array<[string, string]>] | null>)(
+        stream,
+        consumerGroup,
+      )) as [number, string, string, Array<[string, string]>] | null;
+
+      if (!pendingInfo || !Array.isArray(pendingInfo) || pendingInfo.length < 1) {
+        hasMoreStaleEntries = false;
+        break;
+      }
+
+      const totalPending = pendingInfo[0] as number;
+      if (totalPending === 0) {
+        hasMoreStaleEntries = false;
+        break;
+      }
+
+      // Get detailed pending entries (up to readCount at a time)
+      // XPENDING stream group - + count returns: [[id, consumer, idle, deliveries], ...]
+      const pendingDetails = (await (redis.xpending as unknown as (
+        ...args: (string | number)[]
+      ) => Promise<Array<[string, string, number, number]>>)(
+        stream,
+        consumerGroup,
+        '-',
+        '+',
+        readCount,
+      )) as Array<[string, string, number, number]>;
+
+      if (!pendingDetails || pendingDetails.length === 0) {
+        hasMoreStaleEntries = false;
+        break;
+      }
+
+      // Claim all pending entries (since we only claim at startup, they're likely abandoned)
+      // Use 0ms min idle time to claim any pending entry regardless of how long it's been idle
+      const entriesToClaim = pendingDetails.map((entry) => entry[0]);
+
+      if (entriesToClaim.length === 0) {
+        hasMoreStaleEntries = false;
+        break;
+      }
+
+      // Claim the stale entries with 0ms min idle time (claim all pending entries)
+      const claimedEntries = (await (redis.xclaim as (
+        ...args: (string | number)[]
+      ) => Promise<StreamEntry[]>)(
+        stream,
+        consumerGroup,
+        consumerName,
+        0, // 0ms = claim any pending entry regardless of idle time
+        ...entriesToClaim,
+      )) as StreamEntry[];
+
+      // Process claimed entries
+      for (const entry of claimedEntries) {
+        await processEntry(entry, stream, consumerGroup, redis, onMatch, onInvalid);
+      }
+
+      // If we got fewer entries than readCount, we've processed all stale entries
+      if (entriesToClaim.length < readCount) {
+        hasMoreStaleEntries = false;
+      }
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('[settlement-consumer] Error claiming stale entries', error);
+      hasMoreStaleEntries = false;
+    }
+  }
+};
+
+/**
  * Start a long-running loop that consumes settlement matches from Redis.
  * This uses XREADGROUP with BLOCK, and should be stopped via the returned
  * `stop` function.
@@ -140,10 +342,34 @@ export const startSettlementMatchConsumer = (
   options: SettlementMatchConsumerOptions,
 ): (() => void) => {
   const { redis, config, onMatch, onInvalid } = options;
-  const { consumerGroup, consumerName, settlementMatchesStream, readBlockMs, readCount } =
-    config;
+  const {
+    consumerGroup,
+    consumerName,
+    settlementMatchesStream,
+    readBlockMs,
+    readCount,
+  } = config;
 
   let isRunning = true;
+
+  // Process pending entries before starting the main loop
+  void (async (): Promise<void> => {
+    try {
+      await processPendingEntries(
+        redis,
+        settlementMatchesStream,
+        consumerGroup,
+        consumerName,
+        readCount,
+        onMatch,
+        onInvalid,
+      );
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('[settlement-consumer] Error during initial pending entry processing', error);
+      // Continue to start the main loop even if pending processing fails
+    }
+  })();
 
   const loop = async (): Promise<void> => {
     // eslint-disable-next-line no-constant-condition
@@ -171,38 +397,7 @@ export const startSettlementMatchConsumer = (
 
         for (const [stream, entries] of result) {
           for (const entry of entries) {
-            const parsed = parseMatchEntry(entry);
-            const id = entry[0];
-            const rawFields = fieldsArrayToObject(entry[1]);
-
-            if (!parsed) {
-              if (onInvalid) {
-                await onInvalid({
-                  id,
-                  stream,
-                  raw: rawFields,
-                  error: new Error('Validation failed for match entry'),
-                });
-              } else {
-                // eslint-disable-next-line no-console
-                console.error(
-                  '[settlement-consumer] Invalid match entry',
-                  JSON.stringify({ stream, id, raw: rawFields }),
-                );
-              }
-
-              await redis.xack(stream, consumerGroup, id);
-              continue;
-            }
-
-            const matchWithMeta: MatchWithMeta = {
-              id: parsed.id,
-              stream,
-              payload: parsed.value,
-            };
-
-            await onMatch(matchWithMeta);
-            await redis.xack(stream, consumerGroup, id);
+            await processEntry(entry, stream, consumerGroup, redis, onMatch, onInvalid);
           }
         }
       } catch (error) {
