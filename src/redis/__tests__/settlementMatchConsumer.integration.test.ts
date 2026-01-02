@@ -385,3 +385,540 @@ describe('settlementMatchConsumer Integration Tests', () => {
   });
 });
 
+/**
+ * Integration tests for processPendingEntries mechanism.
+ * These tests verify that pending entries for the current consumer and stale entries
+ * from other consumers are correctly processed when the consumer starts.
+ */
+describe('processPendingEntries', () => {
+  let redis: Redis;
+  let config: AppConfig;
+  let onMatch: jest.Mock<Promise<void>, [MatchWithMeta]>;
+  let onInvalid: jest.Mock<Promise<void>, [any]>;
+  const activeConsumers: Array<() => void> = [];
+
+  beforeAll(async () => {
+    const testConfig = createTestConfig();
+    redis = getRedisClient(testConfig);
+    try {
+      await redis.ping();
+    } catch (error) {
+      throw new Error(
+        'Redis is not available. Please start Redis or set REDIS_TEST_URL environment variable.',
+      );
+    }
+    await closeRedisClient();
+  });
+
+  beforeEach(async () => {
+    config = createTestConfig({
+      settlementMatchesStream: `test:settlement:matches:${Date.now()}`,
+      consumerGroup: `test-settlement-engine-${Date.now()}`,
+      consumerName: 'test-consumer-1',
+    });
+    redis = getRedisClient(config);
+    onMatch = jest.fn().mockResolvedValue(undefined);
+    onInvalid = jest.fn().mockResolvedValue(undefined);
+    activeConsumers.length = 0;
+  });
+
+  afterEach(async () => {
+    for (const stop of activeConsumers) {
+      stop();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await cleanupTestStreams(redis, [config.settlementMatchesStream]);
+    await closeRedisClient();
+  });
+
+  it('should process pending entries for current consumer', async () => {
+    await ensureConsumerGroup(
+      redis,
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    );
+
+    // Create entries in the stream
+    const match1 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
+    const match2 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' });
+    const entryId1 = await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      'data',
+      JSON.stringify(match1),
+    );
+    const entryId2 = await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      'data',
+      JSON.stringify(match2),
+    );
+
+    // Read entries with XREADGROUP to make them pending (but don't ACK them)
+    const readResult = (await (redis.xreadgroup as (
+      ...args: (string | number)[]
+    ) => Promise<[[string, Array<[string, string[]]>]] | null>)(
+      'GROUP',
+      config.consumerGroup,
+      config.consumerName,
+      'COUNT',
+      10,
+      'STREAMS',
+      config.settlementMatchesStream,
+      '>',
+    )) as [[string, Array<[string, string[]]>]] | null;
+
+    // Verify entries were actually read
+    expect(readResult).not.toBeNull();
+    expect(readResult?.[0]?.[1]?.length).toBe(2);
+
+    // Verify entries are pending
+    const pendingBefore = (await redis.xpending(
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    )) as [number, string, string, Array<[string, string]>];
+    expect(pendingBefore[0]).toBe(2);
+
+    // Start consumer - it should process pending entries automatically
+    const stop = startSettlementMatchConsumer({
+      redis,
+      config,
+      onMatch,
+    });
+    activeConsumers.push(stop);
+
+    // Wait for pending entries to be processed (poll until done)
+    let attempts = 0;
+    const maxAttempts = 20;
+    while (attempts < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const pending = (await redis.xpending(
+        config.settlementMatchesStream,
+        config.consumerGroup,
+      )) as [number, string, string, Array<[string, string]>];
+      if (pending[0] === 0 && onMatch.mock.calls.length >= 2) {
+        break;
+      }
+      attempts++;
+    }
+
+    // Verify all pending entries were processed
+    expect(onMatch).toHaveBeenCalledTimes(2);
+    const processedIds = onMatch.mock.calls.map((call) => call[0].id);
+    expect(processedIds).toContain(entryId1);
+    expect(processedIds).toContain(entryId2);
+
+    // Verify entries are ACKed (no pending entries)
+    const pendingAfter = (await redis.xpending(
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    )) as [number, string, string, Array<[string, string]>];
+    expect(pendingAfter[0]).toBe(0);
+
+    stop();
+  });
+
+  it('should claim and process stale entries from other consumers', async () => {
+    await ensureConsumerGroup(
+      redis,
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    );
+
+    // Create entries in the stream
+    const match1 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
+    const match2 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' });
+    const entryId1 = await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      'data',
+      JSON.stringify(match1),
+    );
+    const entryId2 = await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      'data',
+      JSON.stringify(match2),
+    );
+
+    // Read entries with a different consumer name to make them pending for that consumer
+    const otherConsumerName = 'other-consumer';
+    const readResult = (await (redis.xreadgroup as (
+      ...args: (string | number)[]
+    ) => Promise<[[string, Array<[string, string[]]>]] | null>)(
+      'GROUP',
+      config.consumerGroup,
+      otherConsumerName,
+      'COUNT',
+      10,
+      'STREAMS',
+      config.settlementMatchesStream,
+      '>',
+    )) as [[string, Array<[string, string[]]>]] | null;
+
+    // Verify entries were actually read
+    expect(readResult).not.toBeNull();
+    expect(readResult?.[0]?.[1]?.length).toBe(2);
+
+    // Verify entries are pending for the other consumer
+    const pendingBefore = (await redis.xpending(
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    )) as [number, string, string, Array<[string, string]>];
+    expect(pendingBefore[0]).toBe(2);
+
+    // Start consumer with different name - it should claim stale entries
+    const stop = startSettlementMatchConsumer({
+      redis,
+      config,
+      onMatch,
+    });
+    activeConsumers.push(stop);
+
+    // Wait for stale entries to be claimed and processed (poll until done)
+    let attempts = 0;
+    const maxAttempts = 20;
+    while (attempts < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const pending = (await redis.xpending(
+        config.settlementMatchesStream,
+        config.consumerGroup,
+      )) as [number, string, string, Array<[string, string]>];
+      if (pending[0] === 0 && onMatch.mock.calls.length >= 2) {
+        break;
+      }
+      attempts++;
+    }
+
+    // Verify all stale entries were claimed and processed
+    expect(onMatch).toHaveBeenCalledTimes(2);
+    const processedIds = onMatch.mock.calls.map((call) => call[0].id);
+    expect(processedIds).toContain(entryId1);
+    expect(processedIds).toContain(entryId2);
+
+    // Verify entries are ACKed (no pending entries)
+    const pendingAfter = (await redis.xpending(
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    )) as [number, string, string, Array<[string, string]>];
+    expect(pendingAfter[0]).toBe(0);
+
+    stop();
+  });
+
+  it('should process multiple batches of pending entries', async () => {
+    await ensureConsumerGroup(
+      redis,
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    );
+
+    // Create more entries than readCount
+    const matches = Array.from({ length: 15 }, (_, index) =>
+      createMatch({
+        matchId: `550e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`,
+      }),
+    );
+    const entryIds: string[] = [];
+    for (const match of matches) {
+      const entryId = await redis.xadd(
+        config.settlementMatchesStream,
+        '*',
+        'data',
+        JSON.stringify(match),
+      );
+      if (entryId) {
+        entryIds.push(entryId);
+      }
+    }
+
+    // Read all entries to make them pending (but don't ACK them)
+    const readResult = (await (redis.xreadgroup as (
+      ...args: (string | number)[]
+    ) => Promise<[[string, Array<[string, string[]]>]] | null>)(
+      'GROUP',
+      config.consumerGroup,
+      config.consumerName,
+      'COUNT',
+      20,
+      'STREAMS',
+      config.settlementMatchesStream,
+      '>',
+    )) as [[string, Array<[string, string[]]>]] | null;
+
+    // Verify entries were actually read
+    expect(readResult).not.toBeNull();
+    expect(readResult?.[0]?.[1]?.length).toBe(15);
+
+    // Verify entries are pending
+    const pendingBefore = (await redis.xpending(
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    )) as [number, string, string, Array<[string, string]>];
+    expect(pendingBefore[0]).toBe(15);
+
+    // Start consumer with readCount limit - it should process in batches
+    const customConfig = { ...config, readCount: 5 };
+    const stop = startSettlementMatchConsumer({
+      redis,
+      config: customConfig,
+      onMatch,
+    });
+    activeConsumers.push(stop);
+
+    // Wait for all batches to be processed (poll until done)
+    let attempts = 0;
+    const maxAttempts = 30;
+    while (attempts < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const pending = (await redis.xpending(
+        config.settlementMatchesStream,
+        config.consumerGroup,
+      )) as [number, string, string, Array<[string, string]>];
+      if (pending[0] === 0 && onMatch.mock.calls.length >= 15) {
+        break;
+      }
+      attempts++;
+    }
+
+    // Verify all entries were processed
+    expect(onMatch).toHaveBeenCalledTimes(15);
+    const processedIds = onMatch.mock.calls.map((call) => call[0].id);
+    for (const entryId of entryIds) {
+      expect(processedIds).toContain(entryId);
+    }
+
+    // Verify entries are ACKed (no pending entries)
+    const pendingAfter = (await redis.xpending(
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    )) as [number, string, string, Array<[string, string]>];
+    expect(pendingAfter[0]).toBe(0);
+
+    stop();
+  });
+
+  it('should process mixed scenario with both pending and stale entries', async () => {
+    await ensureConsumerGroup(
+      redis,
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    );
+
+    // Create entries
+    const match1 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
+    const match2 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' });
+    const match3 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440003' });
+    const match4 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440004' });
+
+    const entryId1 = await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      'data',
+      JSON.stringify(match1),
+    );
+    const entryId2 = await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      'data',
+      JSON.stringify(match2),
+    );
+    const entryId3 = await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      'data',
+      JSON.stringify(match3),
+    );
+    const entryId4 = await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      'data',
+      JSON.stringify(match4),
+    );
+
+    // Read first two entries with current consumer (pending for current consumer)
+    // Use COUNT 2 to limit the read to only 2 entries, leaving 2 for the other consumer
+    const readResult1 = (await (redis.xreadgroup as (
+      ...args: (string | number)[]
+    ) => Promise<[[string, Array<[string, string[]]>]] | null>)(
+      'GROUP',
+      config.consumerGroup,
+      config.consumerName,
+      'COUNT',
+      2,
+      'STREAMS',
+      config.settlementMatchesStream,
+      '>',
+    )) as [[string, Array<[string, string[]]>]] | null;
+
+    // Verify first two entries were read
+    expect(readResult1).not.toBeNull();
+    expect(readResult1?.[0]?.[1]?.length).toBe(2);
+
+    // Read next two entries with different consumer (stale entries)
+    // The remaining 2 entries are still "new" and will be read by this consumer
+    const otherConsumerName = 'other-consumer';
+    const readResult2 = (await (redis.xreadgroup as (
+      ...args: (string | number)[]
+    ) => Promise<[[string, Array<[string, string[]]>]] | null>)(
+      'GROUP',
+      config.consumerGroup,
+      otherConsumerName,
+      'COUNT',
+      2,
+      'STREAMS',
+      config.settlementMatchesStream,
+      '>',
+    )) as [[string, Array<[string, string[]]>]] | null;
+
+    // Verify next two entries were read
+    expect(readResult2).not.toBeNull();
+    expect(readResult2?.[0]?.[1]?.length).toBe(2);
+
+    // Verify entries are pending
+    const pendingBefore = (await redis.xpending(
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    )) as [number, string, string, Array<[string, string]>];
+    expect(pendingBefore[0]).toBe(4);
+
+    // Start consumer - it should process both pending and stale entries
+    const stop = startSettlementMatchConsumer({
+      redis,
+      config,
+      onMatch,
+    });
+    activeConsumers.push(stop);
+
+    // Wait for all entries to be processed (poll until done)
+    let attempts = 0;
+    const maxAttempts = 25;
+    while (attempts < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const pending = (await redis.xpending(
+        config.settlementMatchesStream,
+        config.consumerGroup,
+      )) as [number, string, string, Array<[string, string]>];
+      if (pending[0] === 0 && onMatch.mock.calls.length >= 4) {
+        break;
+      }
+      attempts++;
+    }
+
+    // Verify all entries were processed
+    expect(onMatch).toHaveBeenCalledTimes(4);
+    const processedIds = onMatch.mock.calls.map((call) => call[0].id);
+    expect(processedIds).toContain(entryId1);
+    expect(processedIds).toContain(entryId2);
+    expect(processedIds).toContain(entryId3);
+    expect(processedIds).toContain(entryId4);
+
+    // Verify entries are ACKed (no pending entries)
+    const pendingAfter = (await redis.xpending(
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    )) as [number, string, string, Array<[string, string]>];
+    expect(pendingAfter[0]).toBe(0);
+
+    stop();
+  });
+
+  it('should handle invalid entries in pending entries', async () => {
+    await ensureConsumerGroup(
+      redis,
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    );
+
+    // Create valid and invalid entries
+    const validMatch = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
+    const entryId1 = await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      'data',
+      JSON.stringify(validMatch),
+    );
+    const entryId2 = await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      'data',
+      JSON.stringify({ invalid: 'data' }),
+    );
+
+    // Read entries to make them pending (but don't ACK them)
+    const readResult = (await (redis.xreadgroup as (
+      ...args: (string | number)[]
+    ) => Promise<[[string, Array<[string, string[]]>]] | null>)(
+      'GROUP',
+      config.consumerGroup,
+      config.consumerName,
+      'COUNT',
+      10,
+      'STREAMS',
+      config.settlementMatchesStream,
+      '>',
+    )) as [[string, Array<[string, string[]]>]] | null;
+
+    // Verify entries were actually read
+    expect(readResult).not.toBeNull();
+    expect(readResult?.[0]?.[1]?.length).toBe(2);
+
+    // Verify entries are pending
+    const pendingBefore = (await redis.xpending(
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    )) as [number, string, string, Array<[string, string]>];
+    expect(pendingBefore[0]).toBe(2);
+
+    // Start consumer with onInvalid handler
+    const stop = startSettlementMatchConsumer({
+      redis,
+      config,
+      onMatch,
+      onInvalid,
+    });
+    activeConsumers.push(stop);
+
+    // Wait for pending entries to be processed (poll until done)
+    let attempts = 0;
+    const maxAttempts = 20;
+    while (attempts < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const pending = (await redis.xpending(
+        config.settlementMatchesStream,
+        config.consumerGroup,
+      )) as [number, string, string, Array<[string, string]>];
+      if (pending[0] === 0 && onMatch.mock.calls.length >= 1 && onInvalid.mock.calls.length >= 1) {
+        break;
+      }
+      attempts++;
+    }
+
+    // Verify valid entry was processed via onMatch
+    expect(onMatch).toHaveBeenCalledTimes(1);
+    expect(onMatch).toHaveBeenCalledWith({
+      id: entryId1,
+      stream: config.settlementMatchesStream,
+      payload: validMatch,
+    });
+
+    // Verify invalid entry was handled via onInvalid
+    expect(onInvalid).toHaveBeenCalledTimes(1);
+    expect(onInvalid).toHaveBeenCalledWith({
+      id: entryId2,
+      stream: config.settlementMatchesStream,
+      raw: expect.any(Object),
+      error: expect.any(Error),
+    });
+
+    // Verify entries are ACKed (no pending entries)
+    const pendingAfter = (await redis.xpending(
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    )) as [number, string, string, Array<[string, string]>];
+    expect(pendingAfter[0]).toBe(0);
+
+    stop();
+  });
+});
+
