@@ -66,6 +66,36 @@ const fieldsArrayToObject = (fields: string[]): Record<string, string> => {
 };
 
 /**
+ * Convert a fields object with string values to proper types for Match schema.
+ * This handles the case where fields are stored as individual stream fields (all strings).
+ *
+ * @param fields - Object with string values from Redis stream.
+ * @returns Object with converted types.
+ */
+const convertFieldsToMatch = (fields: Record<string, string>): unknown => {
+  const converted: Record<string, unknown> = { ...fields };
+
+  // Convert numeric fields
+  if (converted.rate !== undefined) {
+    converted.rate = Number(converted.rate);
+  }
+  if (converted.maturity !== undefined) {
+    converted.maturity = Number(converted.maturity);
+  }
+  if (converted.timestamp !== undefined) {
+    converted.timestamp = Number(converted.timestamp);
+  }
+
+  // Convert boolean field
+  if (converted.borrowerIsTaker !== undefined) {
+    const value = String(converted.borrowerIsTaker).toLowerCase();
+    converted.borrowerIsTaker = value === 'true' || value === '1';
+  }
+
+  return converted;
+};
+
+/**
  * Parse a Redis stream entry into a typed `Match` using `matchSchema`.
  *
  * This assumes the matching engine publishes entries where either:
@@ -81,12 +111,16 @@ const parseMatchEntry = (
   let candidate: unknown = fieldsObject;
 
   if (fieldsObject.data) {
+    // If there's a 'data' field, try to parse it as JSON
     try {
       candidate = JSON.parse(fieldsObject.data);
     } catch {
       // Fall back to using the field object as-is.
       candidate = fieldsObject;
     }
+  } else {
+    // If no 'data' field, convert string fields to proper types
+    candidate = convertFieldsToMatch(fieldsObject);
   }
 
   const parsed = matchSchema.safeParse(candidate);
@@ -115,7 +149,10 @@ export const startSettlementMatchConsumer = (
     // eslint-disable-next-line no-constant-condition
     while (isRunning) {
       try {
-        const result = (await redis.xreadgroup(
+        // Use type assertion to work around ioredis v5 type overload resolution
+        const result = (await (redis.xreadgroup as (
+          ...args: (string | number)[]
+        ) => Promise<StreamReadResult | null>)(
           'GROUP',
           consumerGroup,
           consumerName,
@@ -172,6 +209,10 @@ export const startSettlementMatchConsumer = (
         // eslint-disable-next-line no-console
         console.error('[settlement-consumer] Error in consumer loop', error);
         // Back off briefly on error to avoid tight error loops.
+        // Also check if we should continue - the connection might be permanently closed
+        if (!isRunning) {
+          break;
+        }
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }

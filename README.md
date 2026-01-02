@@ -60,4 +60,38 @@ already exist and begin consuming messages. Initially, it logs each validated ma
 later you can extend `processSettlementBatch` to call smart contracts and update your
 database in batches.
 
+### Testing
+
+The project includes both unit tests and integration tests:
+
+- **Unit tests** (`*.test.ts`): Use mocks and don't require external dependencies
+- **Integration tests** (`*.integration.test.ts`): Use a real Redis instance to test actual stream operations
+
+#### Running Tests
+
+```bash
+# Run all tests
+pnpm run test
+
+# Run only unit tests (no Redis required)
+pnpm run test:unit
+
+# Run only integration tests (requires Redis)
+pnpm run test:integration
+```
+
+#### Integration Test Requirements
+
+Integration tests require a Redis server to be running. By default, tests connect to `redis://localhost:6379`. You can override this by setting the `REDIS_TEST_URL` environment variable:
+
+```bash
+REDIS_TEST_URL=redis://localhost:6380 pnpm run test:integration
+```
+
+Integration tests:
+- Use real Redis stream operations (`xadd`, `xreadgroup`, `xack`, `xdel`, `xtrim`, `xgroup`)
+- Create isolated test streams with unique names (timestamped)
+- Clean up test data after each test
+- Verify that data can be submitted to Redis streams and consumed correctly
+
 

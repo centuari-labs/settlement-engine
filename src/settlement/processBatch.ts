@@ -63,8 +63,15 @@ export const processSettlementBatch = async (
   }
 
   // Delete successfully processed entries from their respective streams.
+  // Batch deletions to avoid potential Redis argument limits (typically 1000+ args)
+  // and to handle large batches more efficiently.
+  const BATCH_SIZE = 100;
   for (const [stream, ids] of idsByStream.entries()) {
-    await context.redis.xdel(stream, ...ids);
+    // Process deletions in batches to avoid hitting Redis argument limits
+    for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+      const batch = ids.slice(i, i + BATCH_SIZE);
+      await context.redis.xdel(stream, ...batch);
+    }
   }
 
   // Apply a length-based trim on the main settlement stream to enforce a
