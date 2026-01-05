@@ -2,16 +2,15 @@ import type Redis from 'ioredis';
 import {
   ensureConsumerGroup,
   readMatches,
-  type MatchWithMeta,
 } from '../settlementMatchConsumer';
 import type { AppConfig } from '../../config';
 import { createMatch } from '../../tests/helpers/testFixtures';
-import { getRedisClient, closeRedisClient } from '../client';
 import {
-  cleanupTestStreams,
-  removePendingMessages,
+  createIsolatedTestEnvironment,
+  wait,
+  type IsolatedTestEnvironment,
 } from '../../tests/helpers/redisTestClient';
-import { createTestConfig } from '../../tests/helpers/testConfig';
+import { createIsolatedTestConfig } from '../../tests/helpers/testConfig';
 
 /**
  * Unit tests for settlement match consumer using a real Redis instance.
@@ -20,54 +19,23 @@ import { createTestConfig } from '../../tests/helpers/testConfig';
  * @requires Redis server running (default: localhost:6379, or set REDIS_TEST_URL)
  */
 describe('ensureConsumerGroup', () => {
+  let testEnv: IsolatedTestEnvironment;
   let redis: Redis;
-  let streamName: string;
-  let groupName: string;
-
-  beforeAll(async () => {
-    // Test Redis connection
-    const testConfig = createTestConfig();
-    redis = getRedisClient(testConfig);
-    try {
-      await redis.ping();
-    } catch (error) {
-      throw new Error(
-        'Redis is not available. Please start Redis or set REDIS_TEST_URL environment variable.',
-      );
-    }
-    await closeRedisClient();
-  });
+  let config: AppConfig;
 
   beforeEach(async () => {
-    streamName = `test:stream:${Date.now()}`;
-    groupName = `test-group:${Date.now()}`;
-    redis = getRedisClient(
-      createTestConfig({
-        settlementMatchesStream: streamName,
-        consumerGroup: groupName,
-      }),
-    );
-    // Remove any pending messages before running the test
-    await removePendingMessages(redis, streamName, groupName);
+    config = createIsolatedTestConfig();
+    testEnv = await createIsolatedTestEnvironment(config);
+    redis = testEnv.redis;
   });
 
   afterEach(async () => {
-    try {
-      // Only cleanup if Redis is still connected
-      if (redis && (redis.status === 'ready' || redis.status === 'connecting')) {
-        await cleanupTestStreams(redis, [streamName]);
-      }
-    } catch {
-      // Ignore cleanup errors (e.g., if client is disconnected)
-    }
-    await closeRedisClient();
+    await testEnv.cleanup();
   });
 
   it('should create a consumer group successfully', async () => {
-    await ensureConsumerGroup(redis, streamName, groupName);
-
-    // Verify group was created
-    const groups = await redis.xinfo('GROUPS', streamName);
+    // Consumer group already created in beforeEach, verify it exists
+    const groups = await redis.xinfo('GROUPS', config.settlementMatchesStream);
     expect(Array.isArray(groups)).toBe(true);
     if (Array.isArray(groups)) {
       expect(groups.length).toBeGreaterThan(0);
@@ -75,85 +43,43 @@ describe('ensureConsumerGroup', () => {
   });
 
   it('should handle BUSYGROUP error gracefully when group already exists', async () => {
-    // Create group first time
-    await ensureConsumerGroup(redis, streamName, groupName);
-
+    // Consumer group already created in beforeEach
     // Should not throw when creating again
     await expect(
-      ensureConsumerGroup(redis, streamName, groupName),
+      ensureConsumerGroup(
+        redis,
+        config.settlementMatchesStream,
+        config.consumerGroup,
+      ),
     ).resolves.not.toThrow();
   });
 
   it('should propagate other errors', async () => {
     // Try to create group on non-existent stream without MKSTREAM
     await expect(
-      redis.xgroup('CREATE', 'non-existent-stream', groupName, '0'),
+      redis.xgroup('CREATE', 'non-existent-stream', config.consumerGroup, '0'),
     ).rejects.toThrow();
   });
 });
 
 describe('readMatches', () => {
+  let testEnv: IsolatedTestEnvironment;
   let redis: Redis;
   let config: AppConfig;
-  let onInvalid: jest.Mock<Promise<void>, [any]>;
+  let onInvalid: jest.Mock<Promise<void>, [unknown]>;
 
   // Increase timeout for all tests in this suite
   jest.setTimeout(30000);
 
-  beforeAll(async () => {
-    // Test Redis connection
-    const testConfig = createTestConfig();
-    redis = getRedisClient(testConfig);
-    try {
-      await redis.ping();
-    } catch (error) {
-      throw new Error(
-        'Redis is not available. Please start Redis or set REDIS_TEST_URL environment variable.',
-      );
-    }
-    await closeRedisClient();
-  });
-
   beforeEach(async () => {
-    config = createTestConfig({
-      settlementMatchesStream: `test:settlement:matches:${Date.now()}`,
-      consumerGroup: `test-settlement-engine-${Date.now()}`,
-      consumerName: 'test-consumer-1',
-    });
-    redis = getRedisClient(config);
-    await Promise.race([
-      ensureConsumerGroup(
-        redis,
-        config.settlementMatchesStream,
-        config.consumerGroup,
-      ),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('ensureConsumerGroup timeout')), 10000),
-      ),
-    ]).catch((error) => {
-      // If timeout, try to close and rethrow
-      closeRedisClient().catch(() => {});
-      throw error;
-    });
-    // Remove any pending messages before running the test
-    await removePendingMessages(
-      redis,
-      config.settlementMatchesStream,
-      config.consumerGroup,
-    );
+    config = createIsolatedTestConfig();
+    testEnv = await createIsolatedTestEnvironment(config);
+    redis = testEnv.redis;
     onInvalid = jest.fn().mockResolvedValue(undefined);
   }, 30000);
 
   afterEach(async () => {
-    try {
-      // Only cleanup if Redis is still connected
-      if (redis && (redis.status === 'ready' || redis.status === 'connecting')) {
-        await cleanupTestStreams(redis, [config.settlementMatchesStream]);
-      }
-    } catch {
-      // Ignore cleanup errors (e.g., if client is disconnected)
-    }
-    await closeRedisClient();
+    await testEnv.cleanup();
   }, 30000);
 
   it('should read valid matches with JSON data field', async () => {
@@ -397,5 +323,8 @@ describe('readMatches', () => {
     );
 
     consoleSpy.mockRestore();
+
+    // Wait a bit to ensure cleanup doesn't interfere
+    await wait(100);
   }, 15000);
 });

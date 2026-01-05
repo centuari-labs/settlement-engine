@@ -1,6 +1,19 @@
 import type { AppConfig } from '../../config';
 
 /**
+ * Generate a unique test identifier using timestamp and random suffix.
+ * This provides better entropy than Date.now() alone to avoid collisions
+ * when tests run in parallel or very close together.
+ *
+ * @returns A unique identifier string.
+ */
+export const generateUniqueTestId = (): string => {
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).substring(2, 8);
+  return `${timestamp}-${random}`;
+};
+
+/**
  * Creates a test configuration with sensible defaults for testing.
  * All values can be overridden as needed for specific test scenarios.
  *
@@ -25,5 +38,22 @@ export const createTestConfig = (overrides?: Partial<AppConfig>): AppConfig => {
     ...defaults,
     ...overrides,
   };
+};
+
+/**
+ * Creates a test configuration with unique stream and consumer group names.
+ * Use this for tests that need isolation from other tests.
+ *
+ * @param overrides - Optional fields to override in the test configuration.
+ * @returns A test AppConfig object with unique identifiers.
+ */
+export const createIsolatedTestConfig = (overrides?: Partial<AppConfig>): AppConfig => {
+  const uniqueId = generateUniqueTestId();
+  return createTestConfig({
+    settlementMatchesStream: `test:settlement:matches:${uniqueId}`,
+    consumerGroup: `test-settlement-engine-${uniqueId}`,
+    consumerName: `test-consumer-${uniqueId}`,
+    ...overrides,
+  });
 };
 

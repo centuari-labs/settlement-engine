@@ -1,4 +1,104 @@
-import type Redis from 'ioredis';
+import Redis from 'ioredis';
+import type { AppConfig } from '../../config';
+import { ensureConsumerGroup } from '../../redis/settlementMatchConsumer';
+
+/**
+ * Wait for a condition to become true within a timeout.
+ * This is more reliable than fixed setTimeout delays for async testing.
+ *
+ * @param condition - Function that returns true when condition is met.
+ * @param timeout - Maximum time to wait in milliseconds (default: 5000).
+ * @param interval - Polling interval in milliseconds (default: 50).
+ * @returns Promise that resolves when condition is true or rejects on timeout.
+ */
+export const waitForCondition = async (
+  condition: () => boolean,
+  timeout = 5000,
+  interval = 50,
+): Promise<void> => {
+  const start = Date.now();
+  while (!condition() && Date.now() - start < timeout) {
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+  if (!condition()) {
+    throw new Error(`Condition not met within ${timeout}ms`);
+  }
+};
+
+/**
+ * Wait for a specified duration. Use waitForCondition when possible instead.
+ *
+ * @param ms - Time to wait in milliseconds.
+ * @returns Promise that resolves after the specified time.
+ */
+export const wait = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Isolated test environment with its own Redis client.
+ */
+export interface IsolatedTestEnvironment {
+  /**
+   * The isolated Redis client for this test.
+   */
+  readonly redis: Redis;
+  /**
+   * The configuration used for this test environment.
+   */
+  readonly config: AppConfig;
+  /**
+   * Cleanup function to call in afterEach.
+   * Cleans up streams and disconnects the Redis client.
+   */
+  readonly cleanup: () => Promise<void>;
+}
+
+/**
+ * Create a fully isolated test environment with its own Redis client.
+ * Each test gets its own Redis connection and unique stream/consumer group names.
+ *
+ * @param config - Application configuration with unique stream/group names.
+ * @returns An isolated test environment.
+ */
+export const createIsolatedTestEnvironment = async (
+  config: AppConfig,
+): Promise<IsolatedTestEnvironment> => {
+  const redis = new Redis(config.redisUrl);
+
+  // Ensure the consumer group exists
+  await ensureConsumerGroup(
+    redis,
+    config.settlementMatchesStream,
+    config.consumerGroup,
+  );
+
+  // Remove any pending messages
+  await removePendingMessages(
+    redis,
+    config.settlementMatchesStream,
+    config.consumerGroup,
+  );
+
+  const cleanup = async (): Promise<void> => {
+    try {
+      if (redis.status === 'ready' || redis.status === 'connecting') {
+        await cleanupTestStreams(redis, [config.settlementMatchesStream]);
+        await redis.quit();
+      } else {
+        redis.disconnect();
+      }
+    } catch {
+      // Ignore cleanup errors
+      redis.disconnect();
+    }
+  };
+
+  return {
+    redis,
+    config,
+    cleanup,
+  };
+};
 
 /**
  * Removes all pending messages from a Redis stream consumer group.

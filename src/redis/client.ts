@@ -52,4 +52,16 @@ export const closeRedisClient = async (): Promise<void> => {
   }
 };
 
+/**
+ * Create a new isolated Redis client instance.
+ * Unlike getRedisClient, this creates a new instance each time and does not use the singleton.
+ * Useful for testing to avoid cross-test contamination.
+ *
+ * @param config - Application configuration.
+ * @returns A new Redis client instance.
+ */
+export const createIsolatedRedisClient = (config: AppConfig): Redis => {
+  return new Redis(config.redisUrl);
+};
+
 
