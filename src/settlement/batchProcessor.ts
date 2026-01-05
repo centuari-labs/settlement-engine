@@ -1,6 +1,10 @@
 import type Redis from 'ioredis';
 import type { AppConfig } from '../config';
-import { readMatches, type ReadMatchesOptions } from '../redis/settlementMatchConsumer';
+import {
+  readMatches,
+  processPendingEntriesOnStartup,
+  type ReadMatchesOptions,
+} from '../redis/settlementMatchConsumer';
 import type { MatchWithMeta } from '../redis/settlementMatchConsumer';
 import { BatchAccumulator } from './batchAccumulator';
 import {
@@ -163,12 +167,35 @@ export class BatchProcessor {
     try {
       // Check if accumulator needs more matches
       if (this.accumulator.needsMoreMatches()) {
+        // Check Redis connection status before reading
+        if (
+          this.redis.status !== 'ready' &&
+          this.redis.status !== 'connecting'
+        ) {
+          throw new Error(
+            `Redis connection is not ready. Status: ${this.redis.status}`,
+          );
+        }
+
+        // First, try to process pending entries (retry failed matches)
+        const pendingMatches = await processPendingEntriesOnStartup(
+          this.readMatchesOptions,
+        );
+        if (pendingMatches.length > 0) {
+          this.accumulator.addMatches(pendingMatches);
+          // eslint-disable-next-line no-console
+          console.log(
+            `[batch-processor] Processed ${pendingMatches.length} pending matches, accumulator now has ${this.accumulator.getPendingCount()} pending`,
+          );
+        }
+
+        // Then, read new matches from stream
         const matches = await readMatches(this.readMatchesOptions);
         if (matches.length > 0) {
           this.accumulator.addMatches(matches);
           // eslint-disable-next-line no-console
           console.log(
-            `[batch-processor] Read ${matches.length} matches, accumulator now has ${this.accumulator.getPendingCount()} pending`,
+            `[batch-processor] Read ${matches.length} new matches, accumulator now has ${this.accumulator.getPendingCount()} pending`,
           );
         }
       }
@@ -182,7 +209,10 @@ export class BatchProcessor {
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('[batch-processor] Error in poll', error);
-      this.processingPromise = null;
+      // Ensure processing promise is cleared even if processBatch throws
+      if (this.processingPromise) {
+        this.processingPromise = null;
+      }
     }
   }
 
@@ -231,35 +261,39 @@ export class BatchProcessor {
           },
         );
 
-        // If retryable, add matches back to accumulator for retry
-        // Otherwise, they remain in pending state for manual intervention
+        // Matches remain in Redis pending state (not ACKed) for retry
+        // Retryable errors will be retried through pending entry processing
+        // Non-retryable errors remain in pending state for manual intervention
         if (error.retryable) {
           // eslint-disable-next-line no-console
           console.log(
-            `[batch-processor] Adding ${batch.length} matches back to accumulator for retry`,
+            `[batch-processor] Retryable error, matches remain in Redis pending state for retry`,
+            {
+              matchCount: batch.length,
+              matchIds: batch.map((m) => m.id),
+            },
           );
-          this.accumulator.addMatches(batch);
         } else {
           // eslint-disable-next-line no-console
           console.error(
-            `[batch-processor] Non-retryable error, matches remain in pending state`,
+            `[batch-processor] Non-retryable error, matches remain in Redis pending state for manual intervention`,
             {
               matchIds: batch.map((m) => m.id),
             },
           );
         }
       } else {
-        // Unexpected error - add back to accumulator for retry
+        // Unexpected error - matches remain in Redis pending state for retry
         // eslint-disable-next-line no-console
         console.error(
-          `[batch-processor] Unexpected error during batch processing`,
+          `[batch-processor] Unexpected error during batch processing, matches remain in Redis pending state`,
           {
             matchCount: batch.length,
             duration,
             error,
+            matchIds: batch.map((m) => m.id),
           },
         );
-        this.accumulator.addMatches(batch);
       }
 
       throw error;

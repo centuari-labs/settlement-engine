@@ -16,6 +16,9 @@ export const createTestConfig = (overrides?: Partial<AppConfig>): AppConfig => {
     readBlockMs: 100,
     readCount: 10,
     streamMaxLen: 10000,
+    batchSize: 10,
+    batchIntervalMs: 5000,
+    pollIntervalMs: 200,
   };
 
   return {

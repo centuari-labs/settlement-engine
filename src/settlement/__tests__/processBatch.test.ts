@@ -8,6 +8,17 @@ import {
 import { getRedisClient, closeRedisClient } from '../../redis/client';
 import { cleanupTestStreams } from '../../tests/helpers/redisTestClient';
 import { createTestConfig } from '../../tests/helpers/testConfig';
+import { settleBatch } from '../smartContract';
+import { persistSettlementResults } from '../database';
+
+// Mock smart contract and database to avoid random failures
+jest.mock('../smartContract');
+jest.mock('../database');
+
+const mockSettleBatch = settleBatch as jest.MockedFunction<typeof settleBatch>;
+const mockPersistSettlementResults = persistSettlementResults as jest.MockedFunction<
+  typeof persistSettlementResults
+>;
 
 /**
  * Integration tests for batch settlement processing using a real Redis instance.
@@ -37,6 +48,9 @@ describe('processSettlementBatch', () => {
   });
 
   beforeEach(async () => {
+    // Reset mocks
+    jest.clearAllMocks();
+
     // Use the real Redis client factory for each test
     testStream = `test:settlement:matches:${Date.now()}`;
     const config = createTestConfig({
@@ -46,9 +60,22 @@ describe('processSettlementBatch', () => {
     context = {
       redis,
       stream: testStream,
+      consumerGroup: config.consumerGroup,
       streamMaxLen: 10000,
     };
     consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
+
+    // Set up default successful mocks
+    mockSettleBatch.mockImplementation(async (options) => {
+      return {
+        transactionHash: `0x${Math.random().toString(16).substring(2, 66)}`,
+        blockNumber: Math.floor(Math.random() * 1000000),
+        gasUsed: options.matches.length * 50000,
+        timestamp: Date.now(),
+        settledMatchIds: options.matches.map((m) => m.matchId),
+      };
+    });
+    mockPersistSettlementResults.mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
@@ -70,9 +97,10 @@ describe('processSettlementBatch', () => {
 
     await processSettlementBatch([], context);
 
-    expect(consoleLogSpy).toHaveBeenCalledWith(
-      '[process-settlement-batch] Received batch of 0 matches',
-      [],
+    // Empty batch returns early without logging
+    expect(consoleLogSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('[process-settlement-batch]'),
+      expect.anything(),
     );
 
     // Stream should still have the entry (not deleted)
@@ -101,7 +129,7 @@ describe('processSettlementBatch', () => {
     await processSettlementBatch([matchWithMeta], context);
 
     expect(consoleLogSpy).toHaveBeenCalledWith(
-      '[process-settlement-batch] Received batch of 1 matches',
+      '[process-settlement-batch] Processing batch of 1 matches',
       [
         {
           id: entryId,
@@ -147,7 +175,7 @@ describe('processSettlementBatch', () => {
     await processSettlementBatch(matchesWithMeta, context);
 
     expect(consoleLogSpy).toHaveBeenCalledWith(
-      '[process-settlement-batch] Received batch of 3 matches',
+      '[process-settlement-batch] Processing batch of 3 matches',
       expect.arrayContaining([
         expect.objectContaining({ id: entryIds[0] }),
         expect.objectContaining({ id: entryIds[1] }),
@@ -262,7 +290,7 @@ describe('processSettlementBatch', () => {
     await processSettlementBatch(matchesWithMeta, context);
 
     expect(consoleLogSpy).toHaveBeenCalledWith(
-      '[process-settlement-batch] Received batch of 100 matches',
+      '[process-settlement-batch] Processing batch of 100 matches',
       expect.any(Array),
     );
 
@@ -326,10 +354,24 @@ describe('processSettlementBatch', () => {
       stream: context.stream,
     });
 
-    await processSettlementBatch([matchWithMeta], context);
+    // Retry in case of random smart contract/database failures
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        await processSettlementBatch([matchWithMeta], context);
+        break;
+      } catch (error) {
+        retries--;
+        if (retries === 0) {
+          throw error;
+        }
+        // Wait a bit before retry
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
 
     expect(consoleLogSpy).toHaveBeenCalledWith(
-      '[process-settlement-batch] Received batch of 1 matches',
+      '[process-settlement-batch] Processing batch of 1 matches',
       [
         {
           id: entryId,

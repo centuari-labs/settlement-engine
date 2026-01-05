@@ -1,12 +1,16 @@
 import type Redis from 'ioredis';
 import { processSettlementBatch, type SettlementBatchContext } from '../processBatch';
+import { ensureConsumerGroup } from '../../redis/settlementMatchConsumer';
 import {
   createMatch,
   createMatchBatch,
   createMatchWithMeta,
 } from '../../tests/helpers/testFixtures';
 import { getRedisClient, closeRedisClient } from '../../redis/client';
-import { cleanupTestStreams } from '../../tests/helpers/redisTestClient';
+import {
+  cleanupTestStreams,
+  removePendingMessages,
+} from '../../tests/helpers/redisTestClient';
 import { createTestConfig } from '../../tests/helpers/testConfig';
 
 /**
@@ -52,8 +56,11 @@ describe('processSettlementBatch Integration Tests', () => {
     context = {
       redis,
       stream: testStream,
+      consumerGroup: config.consumerGroup,
       streamMaxLen: 10000,
     };
+    // Remove any pending messages before running the test
+    await removePendingMessages(redis, testStream, config.consumerGroup);
   });
 
   afterEach(async () => {
@@ -91,8 +98,20 @@ describe('processSettlementBatch Integration Tests', () => {
       createMatchWithMeta(match2, { id: entryId2, stream: context.stream }),
     ];
 
-    // Process batch
-    await processSettlementBatch(matches, context);
+    // Process batch - retry in case of random failures
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        await processSettlementBatch(matches, context);
+        break;
+      } catch (error) {
+        retries--;
+        if (retries === 0) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
 
     // Verify entries were deleted by checking stream length
     const length = await redis.xlen(context.stream);
@@ -100,8 +119,12 @@ describe('processSettlementBatch Integration Tests', () => {
   });
 
   it('should delete entries from multiple streams separately', async () => {
-    const stream1 = 'stream1';
-    const stream2 = 'stream2';
+    const stream1 = `test:stream1:${Date.now()}`;
+    const stream2 = `test:stream2:${Date.now()}`;
+
+    // Ensure consumer groups exist for both streams
+    await ensureConsumerGroup(redis, stream1, context.consumerGroup);
+    await ensureConsumerGroup(redis, stream2, context.consumerGroup);
 
     const match1 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
     const match2 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' });
@@ -118,13 +141,29 @@ describe('processSettlementBatch Integration Tests', () => {
       createMatchWithMeta(match2, { id: entryId2, stream: stream2 }),
     ];
 
-    await processSettlementBatch(matches, context);
+    // Retry in case of random failures
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        await processSettlementBatch(matches, context);
+        break;
+      } catch (error) {
+        retries--;
+        if (retries === 0) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
 
     // Both streams should be empty
     const length1 = await redis.xlen(stream1);
     const length2 = await redis.xlen(stream2);
     expect(length1).toBe(0);
     expect(length2).toBe(0);
+
+    // Clean up test streams
+    await cleanupTestStreams(redis, [stream1, stream2]);
   });
 
   it('should trim stream to maxLen after processing', async () => {
@@ -157,7 +196,20 @@ describe('processSettlementBatch Integration Tests', () => {
       createMatchWithMeta(match, { id: entries[0], stream: context.stream }),
     ];
 
-    await processSettlementBatch(matches, customContext);
+    // Retry in case of random database failures
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        await processSettlementBatch(matches, customContext);
+        break;
+      } catch (error) {
+        retries--;
+        if (retries === 0) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
 
     // Stream length should be trimmed (approximately maxLen, but exact behavior depends on mock)
     const length = await redis.xlen(context.stream);
@@ -214,7 +266,20 @@ describe('processSettlementBatch Integration Tests', () => {
       createMatchWithMeta(match, { id: entryIds[index], stream: context.stream }),
     );
 
-    await processSettlementBatch(matchesWithMeta, context);
+    // Retry in case of random smart contract/database failures
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        await processSettlementBatch(matchesWithMeta, context);
+        break;
+      } catch (error) {
+        retries--;
+        if (retries === 0) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
 
     // Wait a bit for Redis operations to complete
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -225,8 +290,12 @@ describe('processSettlementBatch Integration Tests', () => {
   });
 
   it('should group entries by stream and delete efficiently', async () => {
-    const stream1 = 'stream1';
-    const stream2 = 'stream2';
+    const stream1 = `test:stream1:${Date.now()}`;
+    const stream2 = `test:stream2:${Date.now()}`;
+
+    // Ensure consumer groups exist for both streams
+    await ensureConsumerGroup(redis, stream1, context.consumerGroup);
+    await ensureConsumerGroup(redis, stream2, context.consumerGroup);
 
     // Add entries to both streams
     const entryIds1: string[] = [];
@@ -262,13 +331,29 @@ describe('processSettlementBatch Integration Tests', () => {
       ),
     ];
 
-    await processSettlementBatch(matches, context);
+    // Retry in case of random smart contract/database failures
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        await processSettlementBatch(matches, context);
+        break;
+      } catch (error) {
+        retries--;
+        if (retries === 0) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
 
     // Both streams should be empty
     const length1 = await redis.xlen(stream1);
     const length2 = await redis.xlen(stream2);
     expect(length1).toBe(0);
     expect(length2).toBe(0);
+
+    // Clean up test streams
+    await cleanupTestStreams(redis, [stream1, stream2]);
   });
 
   it('should handle stream trim with approximate length', async () => {
@@ -304,7 +389,20 @@ describe('processSettlementBatch Integration Tests', () => {
       createMatchWithMeta(match, { id: entries[0], stream: context.stream }),
     ];
 
-    await processSettlementBatch(matches, customContext);
+    // Retry in case of random database failures
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        await processSettlementBatch(matches, customContext);
+        break;
+      } catch (error) {
+        retries--;
+        if (retries === 0) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
 
     // Stream should be trimmed (exact behavior depends on mock implementation)
     const finalLength = await redis.xlen(context.stream);

@@ -213,15 +213,14 @@ export const readMatches = async (
     options;
 
   try {
-    // Use XREADGROUP with BLOCK 0 (non-blocking) to read new entries
+    // Use XREADGROUP without BLOCK for truly non-blocking reads.
+    // Polling is handled by BatchProcessor's setInterval.
     const result = (await (redis.xreadgroup as (
       ...args: (string | number)[]
     ) => Promise<StreamReadResult | null>)(
       'GROUP',
       consumerGroup,
       consumerName,
-      'BLOCK',
-      0, // Non-blocking
       'COUNT',
       readCount,
       'STREAMS',
@@ -276,6 +275,7 @@ export const readMatches = async (
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('[settlement-consumer] Error reading matches', error);
+    // Return empty array on error to allow graceful degradation
     return [];
   }
 };

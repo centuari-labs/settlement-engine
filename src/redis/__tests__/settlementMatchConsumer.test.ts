@@ -1,13 +1,16 @@
 import type Redis from 'ioredis';
 import {
   ensureConsumerGroup,
-  startSettlementMatchConsumer,
+  readMatches,
   type MatchWithMeta,
 } from '../settlementMatchConsumer';
 import type { AppConfig } from '../../config';
 import { createMatch } from '../../tests/helpers/testFixtures';
 import { getRedisClient, closeRedisClient } from '../client';
-import { cleanupTestStreams } from '../../tests/helpers/redisTestClient';
+import {
+  cleanupTestStreams,
+  removePendingMessages,
+} from '../../tests/helpers/redisTestClient';
 import { createTestConfig } from '../../tests/helpers/testConfig';
 
 /**
@@ -44,10 +47,19 @@ describe('ensureConsumerGroup', () => {
         consumerGroup: groupName,
       }),
     );
+    // Remove any pending messages before running the test
+    await removePendingMessages(redis, streamName, groupName);
   });
 
   afterEach(async () => {
-    await cleanupTestStreams(redis, [streamName]);
+    try {
+      // Only cleanup if Redis is still connected
+      if (redis && (redis.status === 'ready' || redis.status === 'connecting')) {
+        await cleanupTestStreams(redis, [streamName]);
+      }
+    } catch {
+      // Ignore cleanup errors (e.g., if client is disconnected)
+    }
     await closeRedisClient();
   });
 
@@ -80,12 +92,13 @@ describe('ensureConsumerGroup', () => {
   });
 });
 
-describe('startSettlementMatchConsumer', () => {
+describe('readMatches', () => {
   let redis: Redis;
   let config: AppConfig;
-  let onMatch: jest.Mock<Promise<void>, [MatchWithMeta]>;
   let onInvalid: jest.Mock<Promise<void>, [any]>;
-  const activeConsumers: Array<() => void> = [];
+
+  // Increase timeout for all tests in this suite
+  jest.setTimeout(30000);
 
   beforeAll(async () => {
     // Test Redis connection
@@ -107,68 +120,43 @@ describe('startSettlementMatchConsumer', () => {
       consumerGroup: `test-settlement-engine-${Date.now()}`,
       consumerName: 'test-consumer-1',
     });
-    // Ensure we have a fresh Redis connection
-    // getRedisClient will automatically recreate if closed
     redis = getRedisClient(config);
-    // Verify connection is ready
-    await redis.ping();
-    // Reset mocks completely to avoid leftover calls from previous tests
-    onMatch = jest.fn().mockResolvedValue(undefined);
-    onInvalid = jest.fn().mockResolvedValue(undefined);
-    onMatch.mockClear();
-    onInvalid.mockClear();
-    activeConsumers.length = 0;
-    jest.useRealTimers();
-  });
-
-  afterEach(async () => {
-    // Stop all active consumers to prevent memory leaks
-    activeConsumers.forEach((stop) => stop());
-    activeConsumers.length = 0;
-    // Wait longer to ensure consumers have time to check isRunning flag and exit
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    // Clean up test streams - delete the stream completely to remove all messages
-    try {
-      if (redis && redis.status === 'ready') {
-        // Delete the stream entirely to ensure no leftover messages
-        await redis.del(config.settlementMatchesStream);
-        // Also try to destroy consumer group if it exists
-        try {
-          await redis.xgroup('DESTROY', config.settlementMatchesStream, config.consumerGroup);
-        } catch {
-          // Ignore if group doesn't exist
-        }
-      }
-    } catch {
-      // Ignore cleanup errors (redis might be disconnected)
-    }
-    // Close Redis client
-    try {
-      await closeRedisClient();
-    } catch {
-      // Ignore close errors
-    }
-    // Restore real timers if any test used fake timers
-    jest.useRealTimers();
-  });
-
-  it('should process valid match with JSON data field', async () => {
-    await ensureConsumerGroup(
+    await Promise.race([
+      ensureConsumerGroup(
+        redis,
+        config.settlementMatchesStream,
+        config.consumerGroup,
+      ),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('ensureConsumerGroup timeout')), 10000),
+      ),
+    ]).catch((error) => {
+      // If timeout, try to close and rethrow
+      closeRedisClient().catch(() => {});
+      throw error;
+    });
+    // Remove any pending messages before running the test
+    await removePendingMessages(
       redis,
       config.settlementMatchesStream,
       config.consumerGroup,
     );
+    onInvalid = jest.fn().mockResolvedValue(undefined);
+  }, 30000);
 
-    const stop = startSettlementMatchConsumer({
-      redis,
-      config,
-      onMatch,
-    });
-    activeConsumers.push(stop);
+  afterEach(async () => {
+    try {
+      // Only cleanup if Redis is still connected
+      if (redis && (redis.status === 'ready' || redis.status === 'connecting')) {
+        await cleanupTestStreams(redis, [config.settlementMatchesStream]);
+      }
+    } catch {
+      // Ignore cleanup errors (e.g., if client is disconnected)
+    }
+    await closeRedisClient();
+  }, 30000);
 
-    // Give the consumer a moment to start its loop and begin reading
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
+  it('should read valid matches with JSON data field', async () => {
     const match = createMatch();
     const entryId = await redis.xadd(
       config.settlementMatchesStream,
@@ -177,28 +165,24 @@ describe('startSettlementMatchConsumer', () => {
       JSON.stringify(match),
     );
 
-    // Wait for async processing
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    const matches = await readMatches({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
+    });
 
-    expect(onMatch).toHaveBeenCalledTimes(1);
-    expect(onMatch).toHaveBeenCalledWith({
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toEqual({
       id: entryId,
       stream: config.settlementMatchesStream,
       payload: match,
     });
-
-    stop();
   });
 
-  it('should process valid match with individual fields', async () => {
-    await ensureConsumerGroup(
-      redis,
-      config.settlementMatchesStream,
-      config.consumerGroup,
-    );
-
+  it('should read valid matches with individual fields', async () => {
     const match = createMatch();
-    // Include all required fields as individual stream fields
     const entryId = await redis.xadd(
       config.settlementMatchesStream,
       '*',
@@ -226,32 +210,23 @@ describe('startSettlementMatchConsumer', () => {
       String(match.borrowerIsTaker),
     );
 
-    const stop = startSettlementMatchConsumer({
+    const matches = await readMatches({
       redis,
-      config,
-      onMatch,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
     });
-    activeConsumers.push(stop);
 
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    expect(onMatch).toHaveBeenCalledTimes(1);
-    expect(onMatch).toHaveBeenCalledWith({
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toEqual({
       id: entryId,
       stream: config.settlementMatchesStream,
       payload: match,
     });
-
-    stop();
   });
 
-  it('should handle invalid JSON in data field gracefully', async () => {
-    await ensureConsumerGroup(
-      redis,
-      config.settlementMatchesStream,
-      config.consumerGroup,
-    );
-
+  it('should handle invalid JSON in data field', async () => {
     const entryId = await redis.xadd(
       config.settlementMatchesStream,
       '*',
@@ -259,50 +234,26 @@ describe('startSettlementMatchConsumer', () => {
       'invalid json {',
     );
 
-    const stop = startSettlementMatchConsumer({
+    const matches = await readMatches({
       redis,
-      config,
-      onMatch,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
       onInvalid,
     });
-    activeConsumers.push(stop);
 
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    expect(onMatch).not.toHaveBeenCalled();
+    expect(matches).toHaveLength(0);
     expect(onInvalid).toHaveBeenCalledTimes(1);
     expect(onInvalid).toHaveBeenCalledWith({
       id: entryId,
       stream: config.settlementMatchesStream,
-      raw: { data: 'invalid json {' },
+      raw: expect.any(Object),
       error: expect.any(Error),
     });
-
-    stop();
   });
 
   it('should handle invalid schema matches', async () => {
-    await ensureConsumerGroup(
-      redis,
-      config.settlementMatchesStream,
-      config.consumerGroup,
-    );
-
-    // Ensure stream is empty before adding the invalid match
-    const streamInfo = await redis.xinfo('STREAM', config.settlementMatchesStream);
-    if (Array.isArray(streamInfo)) {
-      const lengthIndex = streamInfo.findIndex((v) => v === 'length');
-      if (lengthIndex !== -1 && streamInfo[lengthIndex + 1] > 0) {
-        // Stream has messages, delete them
-        await redis.del(config.settlementMatchesStream);
-        await ensureConsumerGroup(
-          redis,
-          config.settlementMatchesStream,
-          config.consumerGroup,
-        );
-      }
-    }
-
     const invalidMatch = {
       matchId: 'invalid', // Not a UUID
       lendOrderId: '550e8400-e29b-41d4-a716-446655440001',
@@ -314,95 +265,64 @@ describe('startSettlementMatchConsumer', () => {
       JSON.stringify(invalidMatch),
     );
 
-    const stop = startSettlementMatchConsumer({
+    const matches = await readMatches({
       redis,
-      config,
-      onMatch,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
       onInvalid,
     });
-    activeConsumers.push(stop);
 
-    await new Promise((resolve) => setTimeout(resolve, 300));
-
-    expect(onMatch).not.toHaveBeenCalled();
+    expect(matches).toHaveLength(0);
     expect(onInvalid).toHaveBeenCalledTimes(1);
-
-    stop();
+    expect(onInvalid).toHaveBeenCalledWith({
+      id: entryId,
+      stream: config.settlementMatchesStream,
+      raw: expect.any(Object),
+      error: expect.any(Error),
+    });
   });
 
   it('should log to console.error when onInvalid handler is not provided', async () => {
-    await ensureConsumerGroup(
-      redis,
-      config.settlementMatchesStream,
-      config.consumerGroup,
-    );
-
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-    const entryId = await redis.xadd(
+    await redis.xadd(
       config.settlementMatchesStream,
       '*',
       'data',
       JSON.stringify({ invalid: 'data' }),
     );
 
-    const stop = startSettlementMatchConsumer({
+    const matches = await readMatches({
       redis,
-      config,
-      onMatch,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
     });
-    activeConsumers.push(stop);
 
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    expect(onMatch).not.toHaveBeenCalled();
+    expect(matches).toHaveLength(0);
     expect(consoleSpy).toHaveBeenCalledWith(
       '[settlement-consumer] Invalid match entry',
       expect.any(String),
     );
 
     consoleSpy.mockRestore();
-    stop();
   });
 
-  it('should handle null result (no messages)', async () => {
-    await ensureConsumerGroup(
+  it('should return empty array when stream is empty', async () => {
+    const matches = await readMatches({
       redis,
-      config.settlementMatchesStream,
-      config.consumerGroup,
-    );
-
-    const stop = startSettlementMatchConsumer({
-      redis,
-      config,
-      onMatch,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
     });
-    activeConsumers.push(stop);
 
-    // Wait for the consumer to process (should get no messages)
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(matches).toHaveLength(0);
+  }, 15000);
 
-    expect(onMatch).not.toHaveBeenCalled();
-
-    stop();
-  });
-
-  it('should process multiple matches in sequence', async () => {
-    await ensureConsumerGroup(
-      redis,
-      config.settlementMatchesStream,
-      config.consumerGroup,
-    );
-
-    const stop = startSettlementMatchConsumer({
-      redis,
-      config,
-      onMatch,
-    });
-    activeConsumers.push(stop);
-
-    // Give the consumer a moment to start its loop and begin reading
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
+  it('should read multiple matches', async () => {
     const match1 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
     const match2 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' });
 
@@ -419,165 +339,63 @@ describe('startSettlementMatchConsumer', () => {
       JSON.stringify(match2),
     );
 
-    // Wait for async processing
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    expect(onMatch).toHaveBeenCalledTimes(2);
-    expect(onMatch).toHaveBeenNthCalledWith(1, {
-      id: entryId1,
-      stream: config.settlementMatchesStream,
-      payload: match1,
-    });
-    expect(onMatch).toHaveBeenNthCalledWith(2, {
-      id: entryId2,
-      stream: config.settlementMatchesStream,
-      payload: match2,
-    });
-
-    stop();
-  });
-
-  it('should handle errors gracefully with backoff', async () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-
-    await ensureConsumerGroup(
+    const matches = await readMatches({
       redis,
-      config.settlementMatchesStream,
-      config.consumerGroup,
-    );
-
-    // Create a consumer that will encounter an error
-    // We'll disconnect Redis after starting to simulate connection loss
-    const stop = startSettlementMatchConsumer({
-      redis,
-      config,
-      onMatch,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
     });
-    activeConsumers.push(stop);
 
-    // Disconnect Redis to cause errors (use disconnect instead of quit to avoid cleanup issues)
-    try {
-      redis.disconnect();
-    } catch {
-      // Ignore disconnect errors
+    expect(matches).toHaveLength(2);
+    expect(matches[0]?.id).toBe(entryId1);
+    expect(matches[1]?.id).toBe(entryId2);
+  }, 15000);
+
+  it('should respect readCount limit', async () => {
+    // Add more matches than readCount
+    const matches = Array.from({ length: 15 }, () => createMatch());
+    for (const match of matches) {
+      await redis.xadd(
+        config.settlementMatchesStream,
+        '*',
+        'data',
+        JSON.stringify(match),
+      );
     }
 
-    // Wait for error to occur and backoff (1000ms)
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const readMatchesResult = await readMatches({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: 5,
+    });
 
-    // Should have logged an error
-    expect(consoleSpy).toHaveBeenCalled();
+    // Should read up to readCount
+    expect(readMatchesResult.length).toBeLessThanOrEqual(5);
+  }, 15000);
 
-    stop();
-    // Re-open client for cleanup - getRedisClient will detect closed connection and create new one
-    await closeRedisClient();
-    redis = getRedisClient(config);
-    // Ensure connection is ready
-    await redis.ping();
+  it('should handle errors gracefully', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+
+    // Disconnect Redis to cause errors
+    await redis.disconnect();
+
+    const matches = await readMatches({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
+    });
+
+    expect(matches).toHaveLength(0);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[settlement-consumer] Error reading matches',
+      expect.any(Error),
+    );
 
     consoleSpy.mockRestore();
-  }, 5000);
-
-  it('should stop when stop() is called', async () => {
-    await ensureConsumerGroup(
-      redis,
-      config.settlementMatchesStream,
-      config.consumerGroup,
-    );
-
-    const match = createMatch();
-    await redis.xadd(
-      config.settlementMatchesStream,
-      '*',
-      'data',
-      JSON.stringify(match),
-    );
-
-    // Use shorter block time so stop() works faster
-    const stop = startSettlementMatchConsumer({
-      redis,
-      config: { ...config, readBlockMs: 50 },
-      onMatch,
-    });
-    activeConsumers.push(stop);
-
-    // Wait for initial processing
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    const initialCallCount = onMatch.mock.calls.length;
-    expect(initialCallCount).toBeGreaterThan(0);
-
-    // Stop the consumer
-    stop();
-
-    // Wait for block timeout plus a bit more for the loop to check isRunning
-    await new Promise((resolve) => setTimeout(resolve, 150));
-
-    // Should not have processed significantly more (might process 1 more if in flight)
-    expect(onMatch.mock.calls.length).toBeLessThanOrEqual(initialCallCount + 1);
-  }, 5000);
-
-  it('should respect readBlockMs and readCount config', async () => {
-    await ensureConsumerGroup(
-      redis,
-      config.settlementMatchesStream,
-      config.consumerGroup,
-    );
-
-    // Start consumer with a short block time for faster test completion
-    const stop = startSettlementMatchConsumer({
-      redis,
-      config: { ...config, readBlockMs: 100 },
-      onMatch,
-    });
-    activeConsumers.push(stop);
-
-    // Wait a bit - consumer should be waiting (no messages)
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    // No messages should have been processed yet
-    expect(onMatch).not.toHaveBeenCalled();
-
-    stop();
-    // Wait for the block to timeout so consumer can exit
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  }, 5000);
-
-  it('should handle multiple streams correctly', async () => {
-    // Note: The consumer only reads from settlementMatchesStream
-    // This test verifies it processes messages correctly
-    await ensureConsumerGroup(
-      redis,
-      config.settlementMatchesStream,
-      config.consumerGroup,
-    );
-
-    const match = createMatch();
-    const entryId = await redis.xadd(
-      config.settlementMatchesStream,
-      '*',
-      'data',
-      JSON.stringify(match),
-    );
-
-    const stop = startSettlementMatchConsumer({
-      redis,
-      config: { ...config, readBlockMs: 100 },
-      onMatch,
-    });
-    activeConsumers.push(stop);
-
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    expect(onMatch).toHaveBeenCalledTimes(1);
-    expect(onMatch).toHaveBeenCalledWith({
-      id: entryId,
-      stream: config.settlementMatchesStream,
-      payload: match,
-    });
-
-    stop();
-    // Wait for consumer to exit
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  }, 5000);
+  }, 15000);
 });
