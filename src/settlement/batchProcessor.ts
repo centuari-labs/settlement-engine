@@ -5,7 +5,6 @@ import {
   processPendingEntriesOnStartup,
   type ReadMatchesOptions,
 } from '../redis/settlementMatchConsumer';
-import type { MatchWithMeta } from '../redis/settlementMatchConsumer';
 import { BatchAccumulator } from './batchAccumulator';
 import {
   processSettlementBatch,

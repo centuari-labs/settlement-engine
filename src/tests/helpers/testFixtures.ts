@@ -21,6 +21,8 @@ export const createMatch = (overrides?: Partial<Match>): Match => {
     maturity: 1735689600,
     timestamp: 1704067200,
     borrowerIsTaker: true,
+    makerTakerFeeAmount: '0',
+    settlementFeeAmount: '0',
   };
 
   const match = { ...defaults, ...overrides };
