@@ -292,8 +292,10 @@ describe('settlementMatchConsumer Integration Tests', () => {
       String(match.timestamp),
       'borrowerIsTaker',
       String(match.borrowerIsTaker),
-      'makerTakerFeeAmount',
-      String(match.makerTakerFeeAmount),
+      'makerFeeAmount',
+      String(match.makerFeeAmount),
+      'takerFeeAmount',
+      String(match.takerFeeAmount),
       'settlementFeeAmount',
       String(match.settlementFeeAmount),
     );
