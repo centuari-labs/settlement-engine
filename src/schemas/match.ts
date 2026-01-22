@@ -36,9 +36,12 @@ export const matchSchema = z.object({
   takerFeeAmount: z
     .string()
     .regex(/^\d+$/, 'Fee amount must be a positive integer string'),
-  settlementFeeAmount: z
+  lenderSettlementFee: z
     .string()
-    .regex(/^\d+$/, 'Fee amount must be a positive integer string'),
+    .regex(/^\d+$/, 'Settlement fee amount must be a positive integer string'),
+  borrowerSettlementFee: z
+    .string()
+    .regex(/^\d+$/, 'Settlement fee amount must be a positive integer string'),
 });
 
 /**

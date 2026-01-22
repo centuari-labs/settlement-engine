@@ -8,14 +8,13 @@ import {
 import { getRedisClient, closeRedisClient } from '../../redis/client';
 import { cleanupTestStreams } from '../../tests/helpers/redisTestClient';
 import { createTestConfig } from '../../tests/helpers/testConfig';
-import { settleBatch } from '../smartContract';
 import { persistSettlementResults } from '../database';
+import { setupMockSettleBatch, getMockSettleBatch } from '../../tests/helpers/mockSmartContract';
 
-// Mock smart contract and database to avoid random failures
-jest.mock('../smartContract');
+// Mock database to avoid random failures
 jest.mock('../database');
 
-const mockSettleBatch = settleBatch as jest.MockedFunction<typeof settleBatch>;
+const mockSettleBatch = getMockSettleBatch();
 const mockPersistSettlementResults = persistSettlementResults as jest.MockedFunction<
   typeof persistSettlementResults
 >;
@@ -30,6 +29,7 @@ describe('processSettlementBatch', () => {
   let redis: Redis;
   let context: SettlementBatchContext;
   let testStream: string;
+  let testConfig: ReturnType<typeof createTestConfig>;
   let consoleLogSpy: jest.SpyInstance;
 
   beforeAll(async () => {
@@ -53,28 +53,20 @@ describe('processSettlementBatch', () => {
 
     // Use the real Redis client factory for each test
     testStream = `test:settlement:matches:${Date.now()}`;
-    const config = createTestConfig({
+    testConfig = createTestConfig({
       settlementMatchesStream: testStream,
     });
-    redis = getRedisClient(config);
+    redis = getRedisClient(testConfig);
     context = {
       redis,
       stream: testStream,
-      consumerGroup: config.consumerGroup,
+      consumerGroup: testConfig.consumerGroup,
       streamMaxLen: 10000,
     };
     consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
 
-    // Set up default successful mocks
-    mockSettleBatch.mockImplementation(async (options) => {
-      return {
-        transactionHash: `0x${Math.random().toString(16).substring(2, 66)}`,
-        blockNumber: Math.floor(Math.random() * 1000000),
-        gasUsed: options.matches.length * 50000,
-        timestamp: Date.now(),
-        settledMatchIds: options.matches.map((m) => m.matchId),
-      };
-    });
+    // Set up default successful mocks using the mock helper
+    setupMockSettleBatch(mockSettleBatch);
     mockPersistSettlementResults.mockResolvedValue(undefined);
   });
 
@@ -95,7 +87,7 @@ describe('processSettlementBatch', () => {
       JSON.stringify(createMatch()),
     );
 
-    await processSettlementBatch([], context);
+    await processSettlementBatch([], context, testConfig);
 
     // Empty batch returns early without logging
     expect(consoleLogSpy).not.toHaveBeenCalledWith(
@@ -126,7 +118,7 @@ describe('processSettlementBatch', () => {
       stream: context.stream,
     });
 
-    await processSettlementBatch([matchWithMeta], context);
+    await processSettlementBatch([matchWithMeta], context, testConfig);
 
     expect(consoleLogSpy).toHaveBeenCalledWith(
       '[process-settlement-batch] Processing batch of 1 matches',
@@ -172,7 +164,7 @@ describe('processSettlementBatch', () => {
       }),
     );
 
-    await processSettlementBatch(matchesWithMeta, context);
+    await processSettlementBatch(matchesWithMeta, context, testConfig);
 
     expect(consoleLogSpy).toHaveBeenCalledWith(
       '[process-settlement-batch] Processing batch of 3 matches',
@@ -210,7 +202,7 @@ describe('processSettlementBatch', () => {
       createMatchWithMeta(match3, { id: entryId3, stream: stream2 }),
     ];
 
-    await processSettlementBatch(matches, context);
+    await processSettlementBatch(matches, context, testConfig);
 
     // Both streams should be empty
     const length1 = await redis.xlen(stream1);
@@ -255,7 +247,7 @@ describe('processSettlementBatch', () => {
       stream: context.stream,
     });
 
-    await processSettlementBatch([matchWithMeta], customContext);
+    await processSettlementBatch([matchWithMeta], customContext, testConfig);
 
     // Stream should be trimmed (exact behavior depends on Redis implementation)
     const finalLength = await redis.xlen(context.stream);
@@ -287,7 +279,7 @@ describe('processSettlementBatch', () => {
       }),
     );
 
-    await processSettlementBatch(matchesWithMeta, context);
+    await processSettlementBatch(matchesWithMeta, context, testConfig);
 
     expect(consoleLogSpy).toHaveBeenCalledWith(
       '[process-settlement-batch] Processing batch of 100 matches',
@@ -321,7 +313,7 @@ describe('processSettlementBatch', () => {
     await redis.disconnect();
 
     try {
-      await expect(processSettlementBatch([matchWithMeta], context)).rejects.toThrow();
+      await expect(processSettlementBatch([matchWithMeta], context, testConfig)).rejects.toThrow();
     } finally {
       // Reconnect for cleanup
       const config = createTestConfig({
@@ -358,7 +350,7 @@ describe('processSettlementBatch', () => {
     let retries = 3;
     while (retries > 0) {
       try {
-        await processSettlementBatch([matchWithMeta], context);
+        await processSettlementBatch([matchWithMeta], context, testConfig);
         break;
       } catch (error) {
         retries--;

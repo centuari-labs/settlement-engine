@@ -233,7 +233,7 @@ export class BatchProcessor {
         `[batch-processor] Processing batch of ${batch.length} matches`,
       );
 
-      await processSettlementBatch(batch, this.batchContext);
+      await processSettlementBatch(batch, this.batchContext, this.config);
 
       const duration = Date.now() - startTime;
 

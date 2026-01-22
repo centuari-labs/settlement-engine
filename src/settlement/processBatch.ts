@@ -1,5 +1,6 @@
 import type Redis from 'ioredis';
 import type { MatchWithMeta } from '../redis/settlementMatchConsumer';
+import type { AppConfig } from '../config';
 import { settleBatch, type SettlementError } from './smartContract';
 import { persistSettlementResults, type DatabaseError } from './database';
 
@@ -59,11 +60,13 @@ export class BatchProcessingError extends Error {
  *
  * @param matches - Array of matches to process in the batch.
  * @param context - Context providing Redis client and stream configuration.
+ * @param config - Optional application configuration. If not provided, will be loaded from environment.
  * @throws BatchProcessingError if settlement fails (entries remain pending).
  */
 export const processSettlementBatch = async (
   matches: readonly MatchWithMeta[],
   context: SettlementBatchContext,
+  config?: AppConfig,
 ): Promise<void> => {
   if (matches.length === 0) {
     return;
@@ -86,6 +89,7 @@ export const processSettlementBatch = async (
     const startTime = Date.now();
     settlementResult = await settleBatch({
       matches: matches.map((m) => m.payload),
+      config,
     });
     const duration = Date.now() - startTime;
 

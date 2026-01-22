@@ -138,8 +138,10 @@ describe('readMatches', () => {
       String(match.makerFeeAmount),
       'takerFeeAmount',
       String(match.takerFeeAmount),
-      'settlementFeeAmount',
-      String(match.settlementFeeAmount),
+      'lenderSettlementFee',
+      String(match.lenderSettlementFee),
+      'borrowerSettlementFee',
+      String(match.borrowerSettlementFee),
     );
 
     const matches = await readMatches({

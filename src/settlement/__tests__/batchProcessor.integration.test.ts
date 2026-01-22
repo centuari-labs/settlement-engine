@@ -10,14 +10,13 @@ import {
 } from '../../tests/helpers/redisTestClient';
 import { createTestConfig } from '../../tests/helpers/testConfig';
 import type { AppConfig } from '../../config';
-import { settleBatch } from '../smartContract';
 import { persistSettlementResults } from '../database';
+import { setupMockSettleBatch, getMockSettleBatch } from '../../tests/helpers/mockSmartContract';
 
-// Mock smart contract and database to avoid random failures
-jest.mock('../smartContract');
+// Mock database to avoid random failures
 jest.mock('../database');
 
-const mockSettleBatch = settleBatch as jest.MockedFunction<typeof settleBatch>;
+const mockSettleBatch = getMockSettleBatch();
 const mockPersistSettlementResults = persistSettlementResults as jest.MockedFunction<
   typeof persistSettlementResults
 >;
@@ -101,16 +100,8 @@ describe('BatchProcessor Integration Tests', () => {
       onInvalid,
     });
 
-    // Set up default successful mocks
-    mockSettleBatch.mockImplementation(async (options) => {
-      return {
-        transactionHash: `0x${Math.random().toString(16).substring(2, 66)}`,
-        blockNumber: Math.floor(Math.random() * 1000000),
-        gasUsed: options.matches.length * 50000,
-        timestamp: Date.now(),
-        settledMatchIds: options.matches.map((m) => m.matchId),
-      };
-    });
+    // Set up default successful mocks using the mock helper
+    setupMockSettleBatch(mockSettleBatch);
     mockPersistSettlementResults.mockResolvedValue(undefined);
   }, 30000);
 

@@ -12,6 +12,7 @@ import {
   removePendingMessages,
 } from '../../tests/helpers/redisTestClient';
 import { createTestConfig } from '../../tests/helpers/testConfig';
+import { setupMockSettleBatch, getMockSettleBatch } from '../../tests/helpers/mockSmartContract';
 
 /**
  * Integration tests for batch settlement processing using a real Redis instance.
@@ -39,14 +40,20 @@ describe('processSettlementBatch Integration Tests', () => {
     await closeRedisClient();
   });
 
+  let testConfig: ReturnType<typeof createTestConfig>;
+
   beforeEach(async () => {
+    // Set up mock smart contract to return successful results
+    const mockSettleBatch = getMockSettleBatch();
+    setupMockSettleBatch(mockSettleBatch);
+
     // Use the real Redis client factory for each test
     // Use a more unique stream name to avoid collisions
     testStream = `test:settlement:matches:${Date.now()}-${Math.random().toString(36).substring(7)}`;
-    const config = createTestConfig({
+    testConfig = createTestConfig({
       settlementMatchesStream: testStream,
     });
-    redis = getRedisClient(config);
+    redis = getRedisClient(testConfig);
     // Ensure stream doesn't exist before test starts
     try {
       await redis.del(testStream);
@@ -56,11 +63,11 @@ describe('processSettlementBatch Integration Tests', () => {
     context = {
       redis,
       stream: testStream,
-      consumerGroup: config.consumerGroup,
+      consumerGroup: testConfig.consumerGroup,
       streamMaxLen: 10000,
     };
     // Remove any pending messages before running the test
-    await removePendingMessages(redis, testStream, config.consumerGroup);
+    await removePendingMessages(redis, testStream, testConfig.consumerGroup);
   });
 
   afterEach(async () => {
@@ -102,7 +109,7 @@ describe('processSettlementBatch Integration Tests', () => {
     let retries = 3;
     while (retries > 0) {
       try {
-        await processSettlementBatch(matches, context);
+        await processSettlementBatch(matches, context, testConfig);
         break;
       } catch (error) {
         retries--;
@@ -145,7 +152,7 @@ describe('processSettlementBatch Integration Tests', () => {
     let retries = 3;
     while (retries > 0) {
       try {
-        await processSettlementBatch(matches, context);
+        await processSettlementBatch(matches, context, testConfig);
         break;
       } catch (error) {
         retries--;
@@ -200,7 +207,7 @@ describe('processSettlementBatch Integration Tests', () => {
     let retries = 3;
     while (retries > 0) {
       try {
-        await processSettlementBatch(matches, customContext);
+        await processSettlementBatch(matches, customContext, testConfig);
         break;
       } catch (error) {
         retries--;
@@ -226,7 +233,7 @@ describe('processSettlementBatch Integration Tests', () => {
       JSON.stringify(createMatch()),
     );
 
-    await expect(processSettlementBatch([], context)).resolves.not.toThrow();
+    await expect(processSettlementBatch([], context, testConfig)).resolves.not.toThrow();
 
     // Stream should still have the entry
     const length = await redis.xlen(context.stream);
@@ -270,7 +277,7 @@ describe('processSettlementBatch Integration Tests', () => {
     let retries = 3;
     while (retries > 0) {
       try {
-        await processSettlementBatch(matchesWithMeta, context);
+        await processSettlementBatch(matchesWithMeta, context, testConfig);
         break;
       } catch (error) {
         retries--;
@@ -335,7 +342,7 @@ describe('processSettlementBatch Integration Tests', () => {
     let retries = 3;
     while (retries > 0) {
       try {
-        await processSettlementBatch(matches, context);
+        await processSettlementBatch(matches, context, testConfig);
         break;
       } catch (error) {
         retries--;
@@ -393,7 +400,7 @@ describe('processSettlementBatch Integration Tests', () => {
     let retries = 3;
     while (retries > 0) {
       try {
-        await processSettlementBatch(matches, customContext);
+        await processSettlementBatch(matches, customContext, testConfig);
         break;
       } catch (error) {
         retries--;

@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { REDIS_CONSUMER_GROUPS, REDIS_STREAMS } from './schemas/match';
+import {
+  REDIS_CONSUMER_GROUPS,
+  REDIS_STREAMS,
+  ethereumAddressSchema,
+} from './schemas/match';
 
 /**
  * Zod schema for environment configuration.
@@ -43,6 +47,19 @@ const configSchema = z.object({
     .transform((value) => Number(value || 200))
     .pipe(z.number().int().positive())
     .default('200'),
+  SETTLEMENT_CONTRACT_ADDRESS: ethereumAddressSchema,
+  ETHEREUM_RPC_URL: z.string().url('RPC URL must be a valid URL'),
+  SETTLEMENT_PRIVATE_KEY: z
+    .string()
+    .regex(
+      /^(0x)?[a-fA-F0-9]{64}$/,
+      'Private key must be a 64-character hex string (with or without 0x prefix)',
+    ),
+  ETHEREUM_CHAIN_ID: z
+    .string()
+    .transform((value) => Number(value || 1))
+    .pipe(z.number().int().positive())
+    .default('1'),
 });
 
 export type AppConfig = {
@@ -56,6 +73,10 @@ export type AppConfig = {
   readonly batchSize: number;
   readonly batchIntervalMs: number;
   readonly pollIntervalMs: number;
+  readonly settlementContractAddress: string;
+  readonly ethereumRpcUrl: string;
+  readonly settlementPrivateKey: string;
+  readonly ethereumChainId: number;
 };
 
 /**
@@ -75,6 +96,10 @@ export const loadConfig = (): AppConfig => {
     batchSize: parsed.SETTLEMENT_BATCH_SIZE,
     batchIntervalMs: parsed.SETTLEMENT_BATCH_INTERVAL_MS,
     pollIntervalMs: parsed.SETTLEMENT_POLL_INTERVAL_MS,
+    settlementContractAddress: parsed.SETTLEMENT_CONTRACT_ADDRESS,
+    ethereumRpcUrl: parsed.ETHEREUM_RPC_URL,
+    settlementPrivateKey: parsed.SETTLEMENT_PRIVATE_KEY,
+    ethereumChainId: parsed.ETHEREUM_CHAIN_ID,
   };
 };
 

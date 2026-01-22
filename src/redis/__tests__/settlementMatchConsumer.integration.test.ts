@@ -10,14 +10,13 @@ import {
   removePendingMessages,
 } from '../../tests/helpers/redisTestClient';
 import { createTestConfig } from '../../tests/helpers/testConfig';
-import { settleBatch } from '../../settlement/smartContract';
 import { persistSettlementResults } from '../../settlement/database';
+import { setupMockSettleBatch, getMockSettleBatch } from '../../tests/helpers/mockSmartContract';
 
-// Mock smart contract and database to avoid random failures
-jest.mock('../../settlement/smartContract');
+// Mock database to avoid random failures
 jest.mock('../../settlement/database');
 
-const mockSettleBatch = settleBatch as jest.MockedFunction<typeof settleBatch>;
+const mockSettleBatch = getMockSettleBatch();
 const mockPersistSettlementResults = persistSettlementResults as jest.MockedFunction<
   typeof persistSettlementResults
 >;
@@ -99,16 +98,8 @@ describe('settlementMatchConsumer Integration Tests', () => {
       onInvalid,
     });
 
-    // Set up default successful mocks
-    mockSettleBatch.mockImplementation(async (options) => {
-      return {
-        transactionHash: `0x${Math.random().toString(16).substring(2, 66)}`,
-        blockNumber: Math.floor(Math.random() * 1000000),
-        gasUsed: options.matches.length * 50000,
-        timestamp: Date.now(),
-        settledMatchIds: options.matches.map((m) => m.matchId),
-      };
-    });
+    // Set up default successful mocks using the mock helper
+    setupMockSettleBatch(mockSettleBatch);
     mockPersistSettlementResults.mockResolvedValue(undefined);
   }, 30000);
 
@@ -296,8 +287,10 @@ describe('settlementMatchConsumer Integration Tests', () => {
       String(match.makerFeeAmount),
       'takerFeeAmount',
       String(match.takerFeeAmount),
-      'settlementFeeAmount',
-      String(match.settlementFeeAmount),
+      'lenderSettlementFee',
+      String(match.lenderSettlementFee),
+      'borrowerSettlementFee',
+      String(match.borrowerSettlementFee),
     );
 
     processor.start();

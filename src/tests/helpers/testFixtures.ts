@@ -23,7 +23,8 @@ export const createMatch = (overrides?: Partial<Match>): Match => {
     borrowerIsTaker: true,
     makerFeeAmount: '0',
     takerFeeAmount: '0',
-    settlementFeeAmount: '0',
+    lenderSettlementFee: '0',
+    borrowerSettlementFee: '0',
   };
 
   const match = { ...defaults, ...overrides };
