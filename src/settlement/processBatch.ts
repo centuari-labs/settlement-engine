@@ -72,6 +72,9 @@ export const processSettlementBatch = async (
     return;
   }
 
+  //@todo : what if only 1 matches that is not valid, that will make the entire transaction fail, we need to handle this case.
+  //@todo : if calling the smart contract failed, we need to handle the error and retry the transaction.
+
   // eslint-disable-next-line no-console
   console.log(
     `[process-settlement-batch] Processing batch of ${matches.length} matches`,

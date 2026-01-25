@@ -3,6 +3,9 @@
  * This file can be extended with global test setup/teardown hooks if needed.
  */
 
+// Load environment variables from .env file for tests
+import 'dotenv/config';
+
 // Automatically mock smart contract module for all tests
 // This ensures unit and integration tests don't make real blockchain calls
 jest.mock('../settlement/smartContract');

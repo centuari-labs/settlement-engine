@@ -1,4 +1,5 @@
 import type Redis from 'ioredis';
+import { Pool } from 'pg';
 import { processSettlementBatch, type SettlementBatchContext } from '../processBatch';
 import { ensureConsumerGroup } from '../../redis/settlementMatchConsumer';
 import {
@@ -13,6 +14,7 @@ import {
 } from '../../tests/helpers/redisTestClient';
 import { createTestConfig } from '../../tests/helpers/testConfig';
 import { setupMockSettleBatch, getMockSettleBatch } from '../../tests/helpers/mockSmartContract';
+import { insertMatches, insertMatch } from '../../tests/helpers/databaseTestHelpers';
 
 /**
  * Integration tests for batch settlement processing using a real Redis instance.
@@ -24,6 +26,8 @@ describe('processSettlementBatch Integration Tests', () => {
   let redis: Redis;
   let context: SettlementBatchContext;
   let testStream: string;
+  let pool: Pool;
+  const insertedMatchIds: string[] = [];
 
   beforeAll(async () => {
     // Test Redis connection before running tests using the real client factory
@@ -38,11 +42,28 @@ describe('processSettlementBatch Integration Tests', () => {
     }
     // Close the test connection
     await closeRedisClient();
+
+    // Set up database connection for inserting matches
+    if (!process.env.DATABASE_URL) {
+      throw new Error(
+        'DATABASE_URL must be set for integration tests to run.',
+      );
+    }
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+    });
+  });
+
+  afterAll(async () => {
+    await pool.end();
   });
 
   let testConfig: ReturnType<typeof createTestConfig>;
 
   beforeEach(async () => {
+    // Clear match IDs tracking for new test
+    insertedMatchIds.length = 0;
+
     // Set up mock smart contract to return successful results
     const mockSettleBatch = getMockSettleBatch();
     setupMockSettleBatch(mockSettleBatch);
@@ -75,12 +96,62 @@ describe('processSettlementBatch Integration Tests', () => {
     await cleanupTestStreams(redis, [testStream]);
     // Close the Redis client to reset singleton for next test
     await closeRedisClient();
+
+    // Clean up database test data
+    if (insertedMatchIds.length > 0) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        // Find settlement_items that reference our test matches
+        const settlementItems = await client.query<{ settlement_batch_id: string }>(
+          'SELECT DISTINCT settlement_batch_id FROM settlement_items WHERE match_id = ANY($1::uuid[])',
+          [insertedMatchIds],
+        );
+        const batchIds = settlementItems.rows.map((row) => row.settlement_batch_id);
+
+        // Delete settlement_items first (foreign key constraint)
+        if (batchIds.length > 0) {
+          await client.query('DELETE FROM settlement_items WHERE settlement_batch_id = ANY($1::uuid[])', [
+            batchIds,
+          ]);
+          // Delete settlement_batches
+          await client.query('DELETE FROM settlement_batches WHERE id = ANY($1::uuid[])', [batchIds]);
+        }
+
+        // Delete matches
+        await client.query('DELETE FROM matches WHERE id = ANY($1::uuid[])', [insertedMatchIds]);
+        await client.query('COMMIT');
+      } catch (cleanupError) {
+        // Log but don't throw - we're in cleanup
+        // eslint-disable-next-line no-console
+        console.error('Failed to clean up database test data in afterEach:', cleanupError);
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          // Ignore rollback errors
+        }
+      } finally {
+        client.release();
+      }
+    }
   });
 
   it('should delete processed entries from stream', async () => {
     // Add entries to stream
     const match1 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
     const match2 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' });
+
+    // Insert matches into database to satisfy foreign key constraint
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await insertMatches(client, [match1, match2]);
+      await client.query('COMMIT');
+      // Track match IDs for cleanup
+      insertedMatchIds.push(match1.matchId, match2.matchId);
+    } finally {
+      client.release();
+    }
 
     const entryId1 = await redis.xadd(
       context.stream,
@@ -136,6 +207,18 @@ describe('processSettlementBatch Integration Tests', () => {
     const match1 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
     const match2 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' });
 
+    // Insert matches into database to satisfy foreign key constraint
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await insertMatches(client, [match1, match2]);
+      await client.query('COMMIT');
+      // Track match IDs for cleanup
+      insertedMatchIds.push(match1.matchId, match2.matchId);
+    } finally {
+      client.release();
+    }
+
     const entryId1 = await redis.xadd(stream1, '*', 'data', JSON.stringify(match1));
     const entryId2 = await redis.xadd(stream2, '*', 'data', JSON.stringify(match2));
 
@@ -181,11 +264,13 @@ describe('processSettlementBatch Integration Tests', () => {
     };
 
     // Add more entries than maxLen
+    const matchesToInsert: ReturnType<typeof createMatch>[] = [];
     const entries: string[] = [];
     for (let i = 0; i < 10; i++) {
       const match = createMatch({
         matchId: `550e8400-e29b-41d4-a716-44665544000${i}`,
       });
+      matchesToInsert.push(match);
       const entryId = await redis.xadd(
         context.stream,
         '*',
@@ -195,6 +280,21 @@ describe('processSettlementBatch Integration Tests', () => {
       if (entryId) {
         entries.push(entryId);
       }
+    }
+
+    // Insert matches into database to satisfy foreign key constraint
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await insertMatches(client, matchesToInsert);
+      // Also insert the match we'll process
+      const matchToProcess = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440010' });
+      await insertMatch(client, matchToProcess);
+      await client.query('COMMIT');
+      // Track match IDs for cleanup
+      insertedMatchIds.push(...matchesToInsert.map((m) => m.matchId), matchToProcess.matchId);
+    } finally {
+      client.release();
     }
 
     // Process one entry (which will trigger trim)
@@ -251,6 +351,18 @@ describe('processSettlementBatch Integration Tests', () => {
     const matches = createMatchBatch(batchSize);
     const entryIds: string[] = [];
 
+    // Insert matches into database to satisfy foreign key constraint
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await insertMatches(client, matches);
+      await client.query('COMMIT');
+      // Track match IDs for cleanup
+      insertedMatchIds.push(...matches.map((m) => m.matchId));
+    } finally {
+      client.release();
+    }
+
     // Add all matches to stream
     for (const match of matches) {
       const entryId = await redis.xadd(
@@ -305,6 +417,7 @@ describe('processSettlementBatch Integration Tests', () => {
     await ensureConsumerGroup(redis, stream2, context.consumerGroup);
 
     // Add entries to both streams
+    const matchesToInsert: ReturnType<typeof createMatch>[] = [];
     const entryIds1: string[] = [];
     const entryIds2: string[] = [];
 
@@ -312,6 +425,7 @@ describe('processSettlementBatch Integration Tests', () => {
       const match = createMatch({
         matchId: `550e8400-e29b-41d4-a716-44665544000${i}`,
       });
+      matchesToInsert.push(match);
       const id1 = await redis.xadd(stream1, '*', 'data', JSON.stringify(match));
       const id2 = await redis.xadd(stream2, '*', 'data', JSON.stringify(match));
       if (id1) {
@@ -320,6 +434,18 @@ describe('processSettlementBatch Integration Tests', () => {
       if (id2) {
         entryIds2.push(id2);
       }
+    }
+
+    // Insert matches into database to satisfy foreign key constraint
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await insertMatches(client, matchesToInsert);
+      await client.query('COMMIT');
+      // Track match IDs for cleanup
+      insertedMatchIds.push(...matchesToInsert.map((m) => m.matchId));
+    } finally {
+      client.release();
     }
 
     // Create matches from both streams
@@ -371,11 +497,13 @@ describe('processSettlementBatch Integration Tests', () => {
     };
 
     // Add entries
+    const matchesToInsert: ReturnType<typeof createMatch>[] = [];
     const entries: string[] = [];
     for (let i = 0; i < 10; i++) {
       const match = createMatch({
         matchId: `550e8400-e29b-41d4-a716-44665544000${i}`,
       });
+      matchesToInsert.push(match);
       const entryId = await redis.xadd(
         context.stream,
         '*',
@@ -385,6 +513,21 @@ describe('processSettlementBatch Integration Tests', () => {
       if (entryId) {
         entries.push(entryId);
       }
+    }
+
+    // Insert matches into database to satisfy foreign key constraint
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await insertMatches(client, matchesToInsert);
+      // Also insert the match we'll process
+      const matchToProcess = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440010' });
+      await insertMatch(client, matchToProcess);
+      await client.query('COMMIT');
+      // Track match IDs for cleanup
+      insertedMatchIds.push(...matchesToInsert.map((m) => m.matchId), matchToProcess.matchId);
+    } finally {
+      client.release();
     }
 
     const initialLength = await redis.xlen(context.stream);
