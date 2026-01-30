@@ -107,5 +107,3 @@ void main().catch((error) => {
   console.error('[settlement-engine] Fatal error during startup', error);
   process.exit(1);
 });
-
-

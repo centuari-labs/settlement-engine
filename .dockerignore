@@ -1,0 +1,39 @@
+# Dependencies and build output (installed/copied in image)
+node_modules
+dist
+
+# Secrets and local env (set in Dokploy)
+.env
+.env.*
+!.env.example
+
+# Version control
+.git
+.gitignore
+
+# Documentation (not needed in image)
+*.md
+
+# IDE and tooling
+.cursor
+.vscode
+*.swp
+*.swo
+
+# Tests and coverage (not needed in production image)
+coverage
+*.test.ts
+*.spec.ts
+**/__tests__
+jest.config.js
+**/tests
+
+# Lint and format config (not needed in image)
+.eslintrc*
+.prettierrc*
+.editorconfig
+
+# Misc
+.DS_Store
+*.log
+pnpm-lock.yaml
