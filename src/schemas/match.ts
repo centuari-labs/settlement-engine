@@ -25,7 +25,7 @@ export const matchSchema = z.object({
     .number()
     .int('Rate must be an integer')
     .min(0, 'Rate must be non-negative')
-    .max(100000, 'Rate must not exceed 100000 basis points (1000%)'),
+    .max(10000, 'Rate must not exceed 10000 basis points (100%)'),
   loanToken: ethereumAddressSchema,
   maturity: z.number().int().positive('Maturity must be a positive integer'),
   timestamp: z.number().int().positive('Timestamp must be a positive integer'),
