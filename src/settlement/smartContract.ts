@@ -148,8 +148,8 @@ const transformMatchToContractFormat = (match: Match) => {
     maturity: BigInt(match.maturity),
     timestamp: BigInt(match.timestamp),
     borrowerIsTaker: match.borrowerIsTaker,
-    lenderSettlementFee: BigInt(match.lenderSettlementFee),
-    borrowerSettlementFee: BigInt(match.borrowerSettlementFee),
+    lenderSettlementFee: BigInt(match.lenderSettlementFeeAmount),
+    borrowerSettlementFee: BigInt(match.borrowerSettlementFeeAmount),
     makerFeeAmount: BigInt(match.makerFeeAmount),
     takerFeeAmount: BigInt(match.takerFeeAmount),
   };
