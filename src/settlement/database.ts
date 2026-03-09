@@ -208,6 +208,17 @@ const executeWithRetry = async <T>(
       const dbError = mapPostgresErrorToDatabaseError(error);
 
       if (!dbError.retryable || attempt >= maxRetries) {
+        // eslint-disable-next-line no-console
+        console.error(
+          '[database] Persistence failed (non-retryable or max retries reached)',
+          {
+            message: dbError.message,
+            code: dbError.code,
+            retryable: dbError.retryable,
+            attempt,
+            maxRetries,
+          },
+        );
         throw dbError;
       }
 
@@ -248,6 +259,12 @@ export const persistSettlementResults = async (
     return;
   }
 
+  // eslint-disable-next-line no-console
+  console.log('[database] Persisting settlement results', {
+    batchCount: results.length,
+    transactionHashes: results.map((result) => result.transactionHash),
+  });
+
   await executeWithRetry(
     () =>
       withTransaction(async (client) => {
@@ -285,5 +302,10 @@ export const persistSettlementResults = async (
     maxRetries,
     retryDelayMs,
   );
+
+  // eslint-disable-next-line no-console
+  console.log('[database] Settlement results persisted successfully', {
+    batchCount: results.length,
+  });
 };
 

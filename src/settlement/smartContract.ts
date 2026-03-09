@@ -310,7 +310,14 @@ export const settleBatch = async (
   // eslint-disable-next-line no-console
   console.log(
     `[smart-contract] Settling batch of ${matches.length} matches`,
-    matches.map((m) => m.matchId),
+    {
+      matchIds: matches.map((m) => m.matchId),
+      maxRetries,
+      retryDelayMs,
+      settlementContractAddress: config.settlementContractAddress,
+      ethereumChainId: config.ethereumChainId,
+      ethereumRpcUrl: config.ethereumRpcUrl,
+    },
   );
 
   try {
@@ -344,6 +351,18 @@ export const settleBatch = async (
     const block = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
     const timestamp = Number(block.timestamp) * 1000; // Convert to milliseconds
 
+    // eslint-disable-next-line no-console
+    console.log(
+      '[smart-contract] Settlement transaction mined',
+      {
+        transactionHash: receipt.transactionHash,
+        blockNumber,
+        gasUsed,
+        timestamp,
+        matchIds: matches.map((m) => m.matchId),
+      },
+    );
+
     return {
       transactionHash: receipt.transactionHash,
       blockNumber,
@@ -356,6 +375,15 @@ export const settleBatch = async (
       error,
       matches.map((m) => m.matchId),
     );
+
+    // eslint-disable-next-line no-console
+    console.error('[smart-contract] Settlement failed', {
+      message: settlementError.message,
+      code: settlementError.code,
+      retryable: settlementError.retryable,
+      failedMatchIds: settlementError.failedMatchIds,
+    });
+
     throw settlementError;
   }
 };
