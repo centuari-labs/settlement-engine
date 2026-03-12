@@ -74,6 +74,7 @@ export const processSettlementBatch = async (
 
   //@todo : what if only 1 matches that is not valid, that will make the entire transaction fail, we need to handle this case.
   //@todo : if calling the smart contract failed, we need to handle the error and retry the transaction.
+  //@todo : if there is duplicated match id, we need to remove that from settlement engine
 
   // eslint-disable-next-line no-console
   console.log(

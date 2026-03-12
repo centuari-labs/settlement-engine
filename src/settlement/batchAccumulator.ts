@@ -6,6 +6,7 @@ import type { MatchWithMeta } from '../redis/settlementMatchConsumer';
  */
 export class BatchAccumulator {
   private readonly queue: MatchWithMeta[] = [];
+  private readonly seenIds: Set<string> = new Set();
   private lastProcessedTime: number = Date.now();
   private readonly batchSize: number;
   private readonly batchIntervalMs: number;
@@ -27,7 +28,14 @@ export class BatchAccumulator {
    * @param matches - Matches to add to the queue.
    */
   addMatches(matches: readonly MatchWithMeta[]): void {
-    this.queue.push(...matches);
+    for (const match of matches) {
+      if (this.seenIds.has(match.id)) {
+        continue;
+      }
+
+      this.seenIds.add(match.id);
+      this.queue.push(match);
+    }
   }
 
   /**
@@ -71,6 +79,7 @@ export class BatchAccumulator {
   getBatch(): MatchWithMeta[] {
     const batch = [...this.queue];
     this.queue.length = 0;
+    this.seenIds.clear();
     this.resetTimer();
     return batch;
   }
