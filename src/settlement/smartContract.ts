@@ -8,10 +8,51 @@ import {
   toBytes,
   type Chain,
   defineChain,
+  decodeEventLog,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { loadConfig, type AppConfig } from '../config';
 import type { Match } from '../schemas/match';
+import type { MatchWithMeta } from '../redis/settlementMatchConsumer';
+import {
+  BOND_TOKEN_CREATED_EVENT,
+  LEND_POSITION_CREATED_EVENT,
+  BORROW_POSITION_CREATED_EVENT,
+} from './eventAbis';
+
+/**
+ * Parsed BondTokenCreated event from settlement tx receipt.
+ */
+export interface ParsedBondToken {
+  readonly marketId: string;
+  readonly bondToken: string;
+  readonly loanToken: string;
+  readonly maturity: bigint;
+  readonly name: string;
+  readonly symbol: string;
+}
+
+/**
+ * Parsed LendPositionCreated event from settlement tx receipt.
+ */
+export interface ParsedLendPosition {
+  readonly marketId: string;
+  readonly lender: string;
+  readonly bondToken: string;
+  readonly cbtAmount: bigint;
+  readonly principal: bigint;
+}
+
+/**
+ * Parsed BorrowPositionCreated event from settlement tx receipt.
+ */
+export interface ParsedBorrowPosition {
+  readonly marketId: string;
+  readonly borrower: string;
+  readonly principal: bigint;
+  readonly debt: bigint;
+  readonly rate: bigint;
+}
 
 /**
  * Result of a smart contract settlement batch call.
@@ -37,6 +78,18 @@ export interface SettlementResult {
    * Array of match IDs that were successfully settled.
    */
   readonly settledMatchIds: readonly string[];
+  /**
+   * Parsed BondTokenCreated events from the settlement tx receipt.
+   */
+  readonly bondTokenEvents: readonly ParsedBondToken[];
+  /**
+   * Parsed LendPositionCreated events from the settlement tx receipt.
+   */
+  readonly lendPositionEvents: readonly ParsedLendPosition[];
+  /**
+   * Parsed BorrowPositionCreated events from the settlement tx receipt.
+   */
+  readonly borrowPositionEvents: readonly ParsedBorrowPosition[];
 }
 
 /**
@@ -84,7 +137,29 @@ export interface SettleBatchOptions {
 }
 
 /**
+ * Error selector hex values for fallback matching when viem cannot decode.
+ * These match the first 4 bytes of keccak256(error_signature).
+ */
+const ERROR_SELECTORS = {
+  AlreadySettled: '0xb196a44a',
+  ContractPaused: '0xab35696f',
+  EmptyBatch: '0xc2e5347d',
+  InvalidMatchData: '0x388cfcc2',
+  Unauthorized: '0x82b42900',
+  InvalidAmount: '0x2c5211c6',
+  InvalidMaturity: '0xc7a682c8',
+  InsufficientFunds: '0x356680b7',
+  BondTokenNotFound: '0xca42fe63',
+  ZeroAddress: '0xd92e233d',
+  EnforcedPause: '0xd93c0665',
+  ReentrancyGuardReentrantCall: '0x3ee5aeb5',
+  AccessControlUnauthorizedAccount: '0xe2517d3f',
+} as const;
+
+/**
  * Contract ABI for the settlement contract.
+ * Includes function definitions, view functions, and error definitions
+ * so viem can decode reverts properly.
  */
 const SETTLEMENT_CONTRACT_ABI = [
   {
@@ -115,6 +190,37 @@ const SETTLEMENT_CONTRACT_ABI = [
     ],
     outputs: [],
     stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'isSettled',
+    inputs: [{ name: 'matchId', type: 'bytes32' }],
+    outputs: [{ type: 'bool' }],
+    stateMutability: 'view',
+  },
+  // Settlement errors
+  { type: 'error', name: 'AlreadySettled', inputs: [{ name: 'matchId', type: 'bytes32' }] },
+  { type: 'error', name: 'Unauthorized', inputs: [] },
+  { type: 'error', name: 'InvalidMatchData', inputs: [] },
+  { type: 'error', name: 'ZeroAddress', inputs: [] },
+  { type: 'error', name: 'ContractPaused', inputs: [] },
+  { type: 'error', name: 'EmptyBatch', inputs: [] },
+  // Centuari errors
+  { type: 'error', name: 'InvalidAmount', inputs: [] },
+  { type: 'error', name: 'InvalidMaturity', inputs: [] },
+  { type: 'error', name: 'BondTokenNotFound', inputs: [] },
+  // Treasury errors
+  { type: 'error', name: 'InsufficientFunds', inputs: [] },
+  // OpenZeppelin errors
+  { type: 'error', name: 'EnforcedPause', inputs: [] },
+  { type: 'error', name: 'ReentrancyGuardReentrantCall', inputs: [] },
+  {
+    type: 'error',
+    name: 'AccessControlUnauthorizedAccount',
+    inputs: [
+      { name: 'account', type: 'address' },
+      { name: 'neededRole', type: 'bytes32' },
+    ],
   },
 ] as const;
 
@@ -157,6 +263,7 @@ const transformMatchToContractFormat = (match: Match) => {
 
 /**
  * Maps contract error to SettlementError with appropriate retryability.
+ * Matches both decoded error names and hex selectors (defense-in-depth when viem cannot decode).
  *
  * @param error - Error object from contract call.
  * @param matchIds - Array of match IDs that failed.
@@ -168,8 +275,11 @@ const mapContractError = (
 ): SettlementError => {
   const errorMessage = error instanceof Error ? error.message : String(error);
 
-  // Check for specific contract errors
-  if (errorMessage.includes('AlreadySettled')) {
+  const hasError = (name: keyof typeof ERROR_SELECTORS) =>
+    errorMessage.includes(name) || errorMessage.includes(ERROR_SELECTORS[name]);
+
+  // Non-retryable: already settled
+  if (hasError('AlreadySettled')) {
     return {
       message: 'Match already settled',
       code: 'ALREADY_SETTLED',
@@ -178,7 +288,8 @@ const mapContractError = (
     };
   }
 
-  if (errorMessage.includes('ContractPaused')) {
+  // Retryable: contract paused (operator can unpause)
+  if (hasError('ContractPaused') || hasError('EnforcedPause')) {
     return {
       message: 'Contract is paused',
       code: 'CONTRACT_PAUSED',
@@ -187,7 +298,8 @@ const mapContractError = (
     };
   }
 
-  if (errorMessage.includes('EmptyBatch')) {
+  // Non-retryable: empty batch
+  if (hasError('EmptyBatch')) {
     return {
       message: 'Cannot settle empty batch',
       code: 'EMPTY_BATCH',
@@ -196,11 +308,58 @@ const mapContractError = (
     };
   }
 
-  if (errorMessage.includes('InvalidMatchData')) {
+  // Non-retryable: invalid match data
+  if (hasError('InvalidMatchData')) {
     return {
       message: 'Invalid match data',
       code: 'INVALID_MATCH_DATA',
       retryable: false,
+      failedMatchIds: matchIds,
+    };
+  }
+
+  // Non-retryable: insufficient funds (lender has not deposited enough)
+  if (hasError('InsufficientFunds')) {
+    return {
+      message: 'Insufficient funds in Treasury',
+      code: 'INSUFFICIENT_FUNDS',
+      retryable: false,
+      failedMatchIds: matchIds,
+    };
+  }
+
+  // Non-retryable: maturity in the past
+  if (hasError('InvalidMaturity')) {
+    return {
+      message: 'Invalid maturity (expired)',
+      code: 'INVALID_MATURITY',
+      retryable: false,
+      failedMatchIds: matchIds,
+    };
+  }
+
+  // Non-retryable: unauthorized, invalid amount, etc.
+  if (
+    hasError('Unauthorized') ||
+    hasError('InvalidAmount') ||
+    hasError('ZeroAddress') ||
+    hasError('BondTokenNotFound') ||
+    hasError('AccessControlUnauthorizedAccount')
+  ) {
+    return {
+      message: errorMessage,
+      code: 'CONTRACT_ERROR',
+      retryable: false,
+      failedMatchIds: matchIds,
+    };
+  }
+
+  // Retryable: reentrancy (transient)
+  if (hasError('ReentrancyGuardReentrantCall')) {
+    return {
+      message: 'Reentrancy guard triggered',
+      code: 'REENTRANCY',
+      retryable: true,
       failedMatchIds: matchIds,
     };
   }
@@ -236,8 +395,6 @@ const mapContractError = (
  * @returns Chain configuration.
  */
 const createChainFromId = (chainId: number): Chain => {
-  // For common chains, we can use predefined chains, but for flexibility,
-  // we'll create a custom chain. This works for most EVM-compatible chains.
   return defineChain({
     id: chainId,
     name: `Chain ${chainId}`,
@@ -251,7 +408,192 @@ const createChainFromId = (chainId: number): Chain => {
         http: [],
       },
     },
+    contracts: {
+      multicall3: {
+        address: '0xcA11bde05977b3631167028862bE2a173976CA11',
+      },
+    },
   });
+};
+
+/**
+ * Cached viem clients keyed by "<chainId>|<rpcUrl>" to avoid creating new
+ * HTTP transports on every poll cycle (which leaks memory).
+ */
+let cachedPublicClient: ReturnType<typeof createPublicClient> | null = null;
+let cachedClientKey: string | null = null;
+
+const getPublicClient = (config: AppConfig) => {
+  const key = `${config.ethereumChainId}|${config.ethereumRpcUrl}`;
+  if (cachedPublicClient && cachedClientKey === key) {
+    return cachedPublicClient;
+  }
+  const chain = createChainFromId(config.ethereumChainId);
+  cachedPublicClient = createPublicClient({
+    chain,
+    transport: http(config.ethereumRpcUrl),
+  });
+  cachedClientKey = key;
+  return cachedPublicClient;
+};
+
+let cachedWalletClient: ReturnType<typeof createWalletClient> | null = null;
+let cachedWalletKey: string | null = null;
+
+const getWalletClient = (config: AppConfig) => {
+  const key = `${config.ethereumChainId}|${config.ethereumRpcUrl}|${config.settlementPrivateKey}`;
+  if (cachedWalletClient && cachedWalletKey === key) {
+    return cachedWalletClient;
+  }
+  const chain = createChainFromId(config.ethereumChainId);
+  const privateKey = config.settlementPrivateKey.startsWith('0x')
+    ? (config.settlementPrivateKey as `0x${string}`)
+    : (`0x${config.settlementPrivateKey}` as `0x${string}`);
+  const account = privateKeyToAccount(privateKey);
+  cachedWalletClient = createWalletClient({
+    account,
+    chain,
+    transport: http(config.ethereumRpcUrl),
+  });
+  cachedWalletKey = key;
+  return cachedWalletClient;
+};
+
+/**
+ * Parse settlement transaction receipt logs to extract BondTokenCreated,
+ * LendPositionCreated, and BorrowPositionCreated events.
+ */
+const parseReceiptLogs = (logs: readonly { topics: readonly `0x${string}`[]; data: `0x${string}` }[]): {
+  bondTokenEvents: ParsedBondToken[];
+  lendPositionEvents: ParsedLendPosition[];
+  borrowPositionEvents: ParsedBorrowPosition[];
+} => {
+  const bondTokenEvents: ParsedBondToken[] = [];
+  const lendPositionEvents: ParsedLendPosition[] = [];
+  const borrowPositionEvents: ParsedBorrowPosition[] = [];
+
+  for (const log of logs) {
+    try {
+      const decoded = decodeEventLog({
+        abi: [BOND_TOKEN_CREATED_EVENT],
+        data: log.data,
+        topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
+      });
+      if (decoded.eventName === 'BondTokenCreated') {
+        bondTokenEvents.push({
+          marketId: decoded.args.marketId as string,
+          bondToken: (decoded.args.bondToken as string).toLowerCase(),
+          loanToken: (decoded.args.loanToken as string).toLowerCase(),
+          maturity: decoded.args.maturity,
+          name: decoded.args.name,
+          symbol: decoded.args.symbol,
+        });
+      }
+    } catch {
+      // Not a BondTokenCreated event, try next
+    }
+
+    try {
+      const decoded = decodeEventLog({
+        abi: [LEND_POSITION_CREATED_EVENT],
+        data: log.data,
+        topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
+      });
+      if (decoded.eventName === 'LendPositionCreated') {
+        lendPositionEvents.push({
+          marketId: decoded.args.marketId as string,
+          lender: (decoded.args.lender as string).toLowerCase(),
+          bondToken: (decoded.args.bondToken as string).toLowerCase(),
+          cbtAmount: decoded.args.cbtAmount,
+          principal: decoded.args.principal,
+        });
+      }
+    } catch {
+      // Not a LendPositionCreated event, try next
+    }
+
+    try {
+      const decoded = decodeEventLog({
+        abi: [BORROW_POSITION_CREATED_EVENT],
+        data: log.data,
+        topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
+      });
+      if (decoded.eventName === 'BorrowPositionCreated') {
+        borrowPositionEvents.push({
+          marketId: decoded.args.marketId as string,
+          borrower: (decoded.args.borrower as string).toLowerCase(),
+          principal: decoded.args.principal,
+          debt: decoded.args.debt,
+          rate: decoded.args.rate,
+        });
+      }
+    } catch {
+      // Not a BorrowPositionCreated event
+    }
+  }
+
+  return { bondTokenEvents, lendPositionEvents, borrowPositionEvents };
+};
+
+/**
+ * Result of filtering already-settled matches.
+ */
+export interface FilterAlreadySettledResult {
+  /** Matches that have not been settled yet (safe to submit) */
+  readonly unsettled: readonly MatchWithMeta[];
+  /** Matches that were already settled on-chain (should be ACKed from Redis) */
+  readonly alreadySettled: readonly MatchWithMeta[];
+}
+
+/**
+ * Filter out matches that have already been settled on-chain.
+ * Uses multicall to batch all isSettled checks into a single RPC request.
+ *
+ * @param matches - Matches to check.
+ * @param config - Application configuration. If not provided, will be loaded from environment.
+ * @returns Object with unsettled and alreadySettled arrays.
+ */
+export const filterAlreadySettledMatches = async (
+  matches: readonly MatchWithMeta[],
+  config: AppConfig = loadConfig(),
+): Promise<FilterAlreadySettledResult> => {
+  if (matches.length === 0) {
+    return { unsettled: [], alreadySettled: [] };
+  }
+
+  const publicClient = getPublicClient(config);
+  const contractAddress = config.settlementContractAddress as Address;
+
+  const results = await publicClient.multicall({
+    contracts: matches.map((match) => ({
+      address: contractAddress,
+      abi: SETTLEMENT_CONTRACT_ABI,
+      functionName: 'isSettled' as const,
+      args: [keccak256(toBytes(match.payload.matchId))] as const,
+    })),
+  });
+
+  const unsettled: MatchWithMeta[] = [];
+  const alreadySettled: MatchWithMeta[] = [];
+
+  for (let i = 0; i < matches.length; i++) {
+    const result = results[i];
+    if (result.status === 'success' && result.result === true) {
+      alreadySettled.push(matches[i]);
+    } else {
+      unsettled.push(matches[i]);
+    }
+  }
+
+  if (alreadySettled.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[smart-contract] Filtered out ${alreadySettled.length} already-settled matches`,
+      { matchIds: alreadySettled.map((m) => m.payload.matchId) },
+    );
+  }
+
+  return { unsettled, alreadySettled };
 };
 
 /**
@@ -281,28 +623,9 @@ export const settleBatch = async (
     throw error;
   }
 
-  // Normalize private key (remove 0x prefix if present, then add it back for viem)
-  const privateKey = config.settlementPrivateKey.startsWith('0x')
-    ? (config.settlementPrivateKey as `0x${string}`)
-    : (`0x${config.settlementPrivateKey}` as `0x${string}`);
-
-  // Create account from private key
-  const account = privateKeyToAccount(privateKey);
-
-  // Create chain configuration
-  const chain = createChainFromId(config.ethereumChainId);
-
-  // Create clients
-  const publicClient = createPublicClient({
-    chain,
-    transport: http(config.ethereumRpcUrl),
-  });
-
-  const walletClient = createWalletClient({
-    account,
-    chain,
-    transport: http(config.ethereumRpcUrl),
-  });
+  const publicClient = getPublicClient(config);
+  const walletClient = getWalletClient(config);
+  const account = walletClient.account!;
 
   // Transform matches to contract format
   const contractMatches = matches.map(transformMatchToContractFormat);
@@ -322,12 +645,14 @@ export const settleBatch = async (
 
   try {
     // Call the settleMatches function
+    const chain = createChainFromId(config.ethereumChainId);
     const hash = await walletClient.writeContract({
       address: config.settlementContractAddress as Address,
       abi: SETTLEMENT_CONTRACT_ABI,
       functionName: 'settleMatches',
       args: [contractMatches],
       account,
+      chain,
     });
 
     // Wait for transaction receipt
@@ -351,6 +676,9 @@ export const settleBatch = async (
     const block = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
     const timestamp = Number(block.timestamp) * 1000; // Convert to milliseconds
 
+    const { bondTokenEvents, lendPositionEvents, borrowPositionEvents } =
+      parseReceiptLogs(receipt.logs);
+
     // eslint-disable-next-line no-console
     console.log(
       '[smart-contract] Settlement transaction mined',
@@ -360,6 +688,9 @@ export const settleBatch = async (
         gasUsed,
         timestamp,
         matchIds: matches.map((m) => m.matchId),
+        bondTokenEvents: bondTokenEvents.length,
+        lendPositionEvents: lendPositionEvents.length,
+        borrowPositionEvents: borrowPositionEvents.length,
       },
     );
 
@@ -369,6 +700,9 @@ export const settleBatch = async (
       gasUsed,
       timestamp,
       settledMatchIds: matches.map((m) => m.matchId),
+      bondTokenEvents,
+      lendPositionEvents,
+      borrowPositionEvents,
     };
   } catch (error) {
     const settlementError = mapContractError(

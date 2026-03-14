@@ -1,7 +1,17 @@
 import type { Pool, PoolClient } from 'pg';
 import { Pool as PgPool } from 'pg';
 import { z } from 'zod';
-import type { SettlementResult } from './smartContract';
+import type {
+  SettlementResult,
+  ParsedBondToken,
+  ParsedLendPosition,
+  ParsedBorrowPosition,
+} from './smartContract';
+import {
+  bytes32ToUuid,
+  positionUuidFor,
+  cbtAssetUuidFor,
+} from './helpers';
 
 /**
  * Error information for failed database operations.
@@ -241,10 +251,159 @@ const executeWithRetry = async <T>(
 };
 
 /**
+ * Persist BondTokenCreated event: ensure market and cbt_asset exist.
+ */
+const persistBondTokenCreated = async (
+  client: PoolClient,
+  ev: ParsedBondToken,
+  batchId: string,
+): Promise<void> => {
+  const marketIdUuid = bytes32ToUuid(ev.marketId);
+
+  // Look up asset by loanToken address
+  const assetRows = await client.query<{ id: string }>(
+    `SELECT id FROM assets WHERE LOWER(token_address) = LOWER($1) LIMIT 1`,
+    [ev.loanToken],
+  );
+  const asset = assetRows.rows[0];
+  if (!asset) return;
+
+  // Upsert market (insert if not exists)
+  await client.query(
+    `
+      INSERT INTO markets (id, asset_id, maturity, created_at)
+      VALUES ($1, $2, to_timestamp($3::bigint), NOW())
+      ON CONFLICT (id) DO NOTHING
+    `,
+    [marketIdUuid, asset.id, ev.maturity.toString()],
+  );
+
+  // Upsert cbt_asset
+  const cbtAssetId = cbtAssetUuidFor(ev.marketId, ev.bondToken);
+  await client.query(
+    `
+      INSERT INTO cbt_assets (id, market_id, name, symbol, token_address, settlement_batch_id, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+      ON CONFLICT (id) DO UPDATE SET
+        name = EXCLUDED.name,
+        symbol = EXCLUDED.symbol,
+        token_address = EXCLUDED.token_address,
+        settlement_batch_id = EXCLUDED.settlement_batch_id,
+        updated_at = NOW()
+    `,
+    [cbtAssetId, marketIdUuid, ev.name, ev.symbol, ev.bondToken, batchId],
+  );
+};
+
+/**
+ * Persist LendPositionCreated event: upsert lend_position.
+ */
+const persistLendPositionCreated = async (
+  client: PoolClient,
+  ev: ParsedLendPosition,
+  batchId: string,
+): Promise<void> => {
+  const marketIdUuid = bytes32ToUuid(ev.marketId);
+  const positionId = positionUuidFor(ev.marketId, ev.lender);
+
+  const accountRows = await client.query<{ id: string }>(
+    `SELECT id FROM accounts WHERE LOWER(user_wallet) = LOWER($1) LIMIT 1`,
+    [ev.lender],
+  );
+  const account = accountRows.rows[0];
+  if (!account) return;
+
+  const marketRows = await client.query<{ asset_id: string }>(
+    `SELECT asset_id FROM markets WHERE id = $1 LIMIT 1`,
+    [marketIdUuid],
+  );
+  const market = marketRows.rows[0];
+  if (!market) return;
+
+  const cbtAssetRows = await client.query<{ id: string }>(
+    `SELECT id FROM cbt_assets WHERE LOWER(token_address) = LOWER($1) AND market_id = $2 LIMIT 1`,
+    [ev.bondToken, marketIdUuid],
+  );
+  const cbtAsset = cbtAssetRows.rows[0];
+  const cbtAssetId = cbtAsset?.id ?? null;
+
+  const cbtAmount = Number(ev.cbtAmount);
+  const principal = Number(ev.principal);
+
+  await client.query(
+    `
+      INSERT INTO lend_positions (id, account_id, asset_id, market_id, cbt_asset_id, settlement_batch_id, shares, original_shares, amount, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+      ON CONFLICT (id) DO UPDATE SET
+        cbt_asset_id = COALESCE(EXCLUDED.cbt_asset_id, lend_positions.cbt_asset_id),
+        shares = lend_positions.shares + EXCLUDED.shares,
+        original_shares = lend_positions.original_shares + EXCLUDED.original_shares,
+        amount = lend_positions.amount + EXCLUDED.amount,
+        settlement_batch_id = EXCLUDED.settlement_batch_id,
+        updated_at = NOW()
+    `,
+    [
+      positionId,
+      account.id,
+      market.asset_id,
+      marketIdUuid,
+      cbtAssetId,
+      batchId,
+      cbtAmount,
+      cbtAmount,
+      principal,
+    ],
+  );
+};
+
+/**
+ * Persist BorrowPositionCreated event: upsert borrow_position.
+ */
+const persistBorrowPositionCreated = async (
+  client: PoolClient,
+  ev: ParsedBorrowPosition,
+  batchId: string,
+): Promise<void> => {
+  const marketIdUuid = bytes32ToUuid(ev.marketId);
+  const positionId = positionUuidFor(ev.marketId, ev.borrower);
+
+  const accountRows = await client.query<{ id: string }>(
+    `SELECT id FROM accounts WHERE LOWER(user_wallet) = LOWER($1) LIMIT 1`,
+    [ev.borrower],
+  );
+  const account = accountRows.rows[0];
+  if (!account) return;
+
+  const marketRows = await client.query<{ asset_id: string }>(
+    `SELECT asset_id FROM markets WHERE id = $1 LIMIT 1`,
+    [marketIdUuid],
+  );
+  const market = marketRows.rows[0];
+  if (!market) return;
+
+  const principal = Number(ev.principal);
+  const debt = Number(ev.debt);
+
+  await client.query(
+    `
+      INSERT INTO borrow_positions (id, account_id, asset_id, market_id, settlement_batch_id, amount, original_debt, debt, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+      ON CONFLICT (id) DO UPDATE SET
+        original_debt = borrow_positions.original_debt + EXCLUDED.original_debt,
+        debt = borrow_positions.debt + EXCLUDED.debt,
+        amount = borrow_positions.amount + EXCLUDED.amount,
+        settlement_batch_id = EXCLUDED.settlement_batch_id,
+        updated_at = NOW()
+    `,
+    [positionId, account.id, market.asset_id, marketIdUuid, batchId, principal, debt, debt],
+  );
+};
+
+/**
  * Persist settlement results to the database.
  *
- * This is a placeholder implementation that will be replaced with actual
- * database integration (e.g., PostgreSQL, MongoDB, etc.).
+ * Inserts settlement batches, settlement items, and processes parsed events
+ * (BondTokenCreated, LendPositionCreated, BorrowPositionCreated) in dependency order.
  *
  * @param options - Options for persisting settlement results.
  * @returns Promise that resolves when persistence is complete.
@@ -296,6 +455,21 @@ export const persistSettlementResults = async (
               `,
               [batchId, matchId],
             );
+          }
+
+          // Step A: BondTokenCreated -> markets + cbt_assets (must run first)
+          for (const ev of result.bondTokenEvents) {
+            await persistBondTokenCreated(client, ev, batchId);
+          }
+
+          // Step B: LendPositionCreated -> lend_positions
+          for (const ev of result.lendPositionEvents) {
+            await persistLendPositionCreated(client, ev, batchId);
+          }
+
+          // Step C: BorrowPositionCreated -> borrow_positions
+          for (const ev of result.borrowPositionEvents) {
+            await persistBorrowPositionCreated(client, ev, batchId);
           }
         }
       }),

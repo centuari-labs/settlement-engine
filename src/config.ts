@@ -47,6 +47,26 @@ const configSchema = z.object({
     .transform((value) => Number(value || 200))
     .pipe(z.number().int().positive())
     .default('200'),
+  SETTLEMENT_PENDING_RECLAIM_INTERVAL_MS: z
+    .string()
+    .transform((value) => Number(value || 60000))
+    .pipe(z.number().int().positive())
+    .default('60000'),
+  REDIS_XCLAIM_MIN_IDLE_MS: z
+    .string()
+    .transform((value) => Number(value || 60000))
+    .pipe(z.number().int().positive())
+    .default('60000'),
+  SETTLEMENT_FAILURE_BACKOFF_BASE_MS: z
+    .string()
+    .transform((value) => Number(value || 1000))
+    .pipe(z.number().int().positive())
+    .default('1000'),
+  SETTLEMENT_FAILURE_BACKOFF_MAX_MS: z
+    .string()
+    .transform((value) => Number(value || 60000))
+    .pipe(z.number().int().positive())
+    .default('60000'),
   SETTLEMENT_CONTRACT_ADDRESS: ethereumAddressSchema,
   ETHEREUM_RPC_URL: z.string().url('RPC URL must be a valid URL'),
   SETTLEMENT_PRIVATE_KEY: z
@@ -73,6 +93,10 @@ export type AppConfig = {
   readonly batchSize: number;
   readonly batchIntervalMs: number;
   readonly pollIntervalMs: number;
+  readonly pendingReclaimIntervalMs: number;
+  readonly xclaimMinIdleMs: number;
+  readonly failureBackoffBaseMs: number;
+  readonly failureBackoffMaxMs: number;
   readonly settlementContractAddress: string;
   readonly ethereumRpcUrl: string;
   readonly settlementPrivateKey: string;
@@ -96,6 +120,10 @@ export const loadConfig = (): AppConfig => {
     batchSize: parsed.SETTLEMENT_BATCH_SIZE,
     batchIntervalMs: parsed.SETTLEMENT_BATCH_INTERVAL_MS,
     pollIntervalMs: parsed.SETTLEMENT_POLL_INTERVAL_MS,
+    pendingReclaimIntervalMs: parsed.SETTLEMENT_PENDING_RECLAIM_INTERVAL_MS,
+    xclaimMinIdleMs: parsed.REDIS_XCLAIM_MIN_IDLE_MS,
+    failureBackoffBaseMs: parsed.SETTLEMENT_FAILURE_BACKOFF_BASE_MS,
+    failureBackoffMaxMs: parsed.SETTLEMENT_FAILURE_BACKOFF_MAX_MS,
     settlementContractAddress: parsed.SETTLEMENT_CONTRACT_ADDRESS,
     ethereumRpcUrl: parsed.ETHEREUM_RPC_URL,
     settlementPrivateKey: parsed.SETTLEMENT_PRIVATE_KEY,

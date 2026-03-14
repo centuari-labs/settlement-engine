@@ -34,6 +34,8 @@ const main = async (): Promise<void> => {
     consumerGroup: config.consumerGroup,
     consumerName: config.consumerName,
     readCount: config.readCount,
+    maxEntries: config.batchSize * 3,
+    xclaimMinIdleMs: config.xclaimMinIdleMs,
   };
 
   try {

@@ -10,25 +10,36 @@ export class BatchAccumulator {
   private lastProcessedTime: number = Date.now();
   private readonly batchSize: number;
   private readonly batchIntervalMs: number;
+  private readonly maxCapacity: number;
 
   /**
    * Create a new batch accumulator.
    *
    * @param batchSize - Maximum number of matches per batch.
    * @param batchIntervalMs - Time interval in milliseconds after which a batch should be processed.
+   * @param maxCapacity - Maximum queue size (backpressure). Default: batchSize * 5.
    */
-  constructor(batchSize: number, batchIntervalMs: number) {
+  constructor(
+    batchSize: number,
+    batchIntervalMs: number,
+    maxCapacity?: number,
+  ) {
     this.batchSize = batchSize;
     this.batchIntervalMs = batchIntervalMs;
+    this.maxCapacity = maxCapacity ?? batchSize * 5;
   }
 
   /**
    * Add matches to the accumulator queue.
+   * Stops accepting when queue reaches maxCapacity (backpressure).
    *
    * @param matches - Matches to add to the queue.
    */
   addMatches(matches: readonly MatchWithMeta[]): void {
     for (const match of matches) {
+      if (this.queue.length >= this.maxCapacity) {
+        break;
+      }
       if (this.seenIds.has(match.id)) {
         continue;
       }

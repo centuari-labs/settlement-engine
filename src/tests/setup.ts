@@ -16,5 +16,15 @@ jest.mock('../settlement/smartContract');
 beforeEach(() => {
   // Clear all mocks before each test
   jest.clearAllMocks();
+
+  // Default: filterAlreadySettledMatches returns all matches as unsettled
+  // (no matches already settled on-chain). Tests can override if needed.
+  const smartContract = require('../settlement/smartContract');
+  smartContract.filterAlreadySettledMatches.mockImplementation(
+    async (matches: readonly { id: string; stream: string; payload: unknown }[]) => ({
+      unsettled: [...matches],
+      alreadySettled: [],
+    }),
+  );
 });
 

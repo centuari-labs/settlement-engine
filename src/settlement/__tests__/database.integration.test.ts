@@ -121,6 +121,9 @@ describe('persistSettlementResults Integration Tests', () => {
         gasUsed: 1000,
         timestamp: Date.now(),
         settledMatchIds,
+        bondTokenEvents: [],
+        lendPositionEvents: [],
+        borrowPositionEvents: [],
       };
 
       await persistSettlementResults({

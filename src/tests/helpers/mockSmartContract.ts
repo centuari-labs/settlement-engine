@@ -16,6 +16,9 @@ const createSuccessfulSettlementResult = (
     gasUsed: options.matches.length * 50000,
     timestamp: Date.now(),
     settledMatchIds: options.matches.map((m) => m.matchId),
+    bondTokenEvents: [],
+    lendPositionEvents: [],
+    borrowPositionEvents: [],
   };
 };
 

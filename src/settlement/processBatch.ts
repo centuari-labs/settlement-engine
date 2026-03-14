@@ -1,7 +1,11 @@
 import type Redis from 'ioredis';
 import type { MatchWithMeta } from '../redis/settlementMatchConsumer';
 import type { AppConfig } from '../config';
-import { settleBatch, type SettlementError } from './smartContract';
+import {
+  settleBatch,
+  filterAlreadySettledMatches,
+  type SettlementError,
+} from './smartContract';
 import { persistSettlementResults, type DatabaseError } from './database';
 
 /**
@@ -49,12 +53,42 @@ export class BatchProcessingError extends Error {
 }
 
 /**
+ * ACK and delete stream entries from Redis.
+ */
+const ackAndDeleteEntries = async (
+  context: SettlementBatchContext,
+  matches: readonly MatchWithMeta[],
+): Promise<void> => {
+  const idsByStream = new Map<string, string[]>();
+  for (const match of matches) {
+    const ids = idsByStream.get(match.stream) ?? [];
+    ids.push(match.id);
+    idsByStream.set(match.stream, ids);
+  }
+
+  for (const [stream, ids] of idsByStream.entries()) {
+    for (const id of ids) {
+      await context.redis.xack(stream, context.consumerGroup, id);
+    }
+  }
+
+  const DELETE_BATCH_SIZE = 100;
+  for (const [stream, ids] of idsByStream.entries()) {
+    for (let i = 0; i < ids.length; i += DELETE_BATCH_SIZE) {
+      const batch = ids.slice(i, i + DELETE_BATCH_SIZE);
+      await context.redis.xdel(stream, ...batch);
+    }
+  }
+};
+
+/**
  * Process a batch of settlement matches.
  *
  * This function:
- * 1. Calls the smart contract to settle the batch
- * 2. Persists settlement results to the database
- * 3. Only ACKs and deletes stream entries after successful settlement
+ * 1. Filters out already-settled matches (ACKs them from Redis immediately)
+ * 2. Calls the smart contract to settle the remaining batch
+ * 3. Persists settlement results to the database
+ * 4. ACKs and deletes stream entries after successful settlement
  *
  * If any step fails, the entries remain in pending state for retry.
  *
@@ -74,7 +108,6 @@ export const processSettlementBatch = async (
 
   //@todo : what if only 1 matches that is not valid, that will make the entire transaction fail, we need to handle this case.
   //@todo : if calling the smart contract failed, we need to handle the error and retry the transaction.
-  //@todo : if there is duplicated match id, we need to remove that from settlement engine
 
   // eslint-disable-next-line no-console
   console.log(
@@ -87,12 +120,31 @@ export const processSettlementBatch = async (
     })),
   );
 
+  // Step 0: Filter out already-settled matches (prevents infinite retry loop)
+  const { unsettled, alreadySettled } = await filterAlreadySettledMatches(
+    matches,
+    config,
+  );
+
+  if (alreadySettled.length > 0) {
+    await ackAndDeleteEntries(context, alreadySettled);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[process-settlement-batch] ACKed ${alreadySettled.length} already-settled matches`,
+    );
+  }
+
+  if (unsettled.length === 0) {
+    // All matches were already settled; we're done
+    return;
+  }
+
   let settlementResult;
   try {
     // Step 1: Call smart contract to settle the batch
     const startTime = Date.now();
     settlementResult = await settleBatch({
-      matches: matches.map((m) => m.payload),
+      matches: unsettled.map((m) => m.payload),
       config,
     });
     const duration = Date.now() - startTime;
@@ -105,7 +157,7 @@ export const processSettlementBatch = async (
         blockNumber: settlementResult.blockNumber,
         gasUsed: settlementResult.gasUsed,
         duration,
-        matchCount: matches.length,
+        matchCount: unsettled.length,
       },
     );
   } catch (error) {
@@ -122,7 +174,7 @@ export const processSettlementBatch = async (
         error: settlementError.message,
         code: settlementError.code,
         retryable: isRetryable,
-        matchCount: matches.length,
+        matchCount: unsettled.length,
       },
     );
 
@@ -146,7 +198,7 @@ export const processSettlementBatch = async (
       `[process-settlement-batch] Database persistence successful`,
       {
         duration,
-        matchCount: matches.length,
+        matchCount: unsettled.length,
       },
     );
   } catch (error) {
@@ -161,7 +213,7 @@ export const processSettlementBatch = async (
         error: dbError.message,
         code: dbError.code,
         retryable: isRetryable,
-        matchCount: matches.length,
+        matchCount: unsettled.length,
       },
     );
 
@@ -172,33 +224,8 @@ export const processSettlementBatch = async (
     );
   }
 
-  // Step 3: Only ACK and delete entries after successful settlement
-  // Group entry IDs by stream so we can ACK and delete them efficiently
-  const idsByStream = new Map<string, string[]>();
-  for (const match of matches) {
-    const ids = idsByStream.get(match.stream) ?? [];
-    ids.push(match.id);
-    idsByStream.set(match.stream, ids);
-  }
-
-  // ACK all entries in the batch
-  for (const [stream, ids] of idsByStream.entries()) {
-    for (const id of ids) {
-      await context.redis.xack(stream, context.consumerGroup, id);
-    }
-  }
-
-  // Delete successfully processed entries from their respective streams.
-  // Batch deletions to avoid potential Redis argument limits (typically 1000+ args)
-  // and to handle large batches more efficiently.
-  const DELETE_BATCH_SIZE = 100;
-  for (const [stream, ids] of idsByStream.entries()) {
-    // Process deletions in batches to avoid hitting Redis argument limits
-    for (let i = 0; i < ids.length; i += DELETE_BATCH_SIZE) {
-      const batch = ids.slice(i, i + DELETE_BATCH_SIZE);
-      await context.redis.xdel(stream, ...batch);
-    }
-  }
+  // Step 3: ACK and delete successfully settled entries from Redis
+  await ackAndDeleteEntries(context, unsettled);
 
   // Apply a length-based trim on the main settlement stream to enforce a
   // bounded retention window and avoid unbounded growth.
@@ -213,7 +240,7 @@ export const processSettlementBatch = async (
   console.log(
     `[process-settlement-batch] Batch processing complete`,
     {
-      matchCount: matches.length,
+      matchCount: unsettled.length,
       transactionHash: settlementResult.transactionHash,
     },
   );

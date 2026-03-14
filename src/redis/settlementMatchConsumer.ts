@@ -44,6 +44,14 @@ export interface ReadMatchesOptions {
     readonly raw: any;
     readonly error: unknown;
   }) => Promise<void>;
+  /**
+   * Maximum total entries to load (caps memory usage). Default: readCount * 3.
+   */
+  readonly maxEntries?: number;
+  /**
+   * Minimum idle time in ms for XCLAIM (only claim entries idle this long). Default: 60000.
+   */
+  readonly xclaimMinIdleMs?: number;
 }
 
 /**
@@ -290,6 +298,8 @@ export const readMatches = async (
  * @param consumerName - Current consumer name.
  * @param readCount - Maximum number of entries to read per batch.
  * @param onInvalid - Optional handler for invalid entries.
+ * @param maxEntries - Maximum total entries to load (caps memory). Default: readCount * 3.
+ * @param xclaimMinIdleMs - Minimum idle time in ms for XCLAIM. Default: 60000.
  * @returns Array of valid matches from pending entries.
  */
 const processPendingEntries = async (
@@ -299,11 +309,15 @@ const processPendingEntries = async (
   consumerName: string,
   readCount: number,
   onInvalid?: ReadMatchesOptions['onInvalid'],
+  maxEntries?: number,
+  xclaimMinIdleMs: number = 60000,
 ): Promise<MatchWithMeta[]> => {
   const matches: MatchWithMeta[] = [];
+  const cap = maxEntries ?? readCount * 3;
   // First, process pending entries for the current consumer using XREADGROUP with '0'
   let hasMorePending = true;
   while (hasMorePending) {
+    if (matches.length >= cap) break;
     try {
       // Read pending entries for this consumer (using '0' instead of '>')
       const result = (await (redis.xreadgroup as (
@@ -362,7 +376,7 @@ const processPendingEntries = async (
   // Second, claim and process stale entries from other consumers
   // Continue claiming in batches until no more stale entries are available
   let hasMoreStaleEntries = true;
-  while (hasMoreStaleEntries) {
+  while (hasMoreStaleEntries && matches.length < cap) {
     try {
       // Get pending entry summary
       // XPENDING returns: [total, start, end, consumers]
@@ -410,14 +424,14 @@ const processPendingEntries = async (
         break;
       }
 
-      // Claim the stale entries with 0ms min idle time (claim all pending entries)
+      // Claim only entries idle long enough (abandoned by other consumers)
       const claimedEntries = (await (redis.xclaim as (
         ...args: (string | number)[]
       ) => Promise<StreamEntry[]>)(
         stream,
         consumerGroup,
         consumerName,
-        0, // 0ms = claim any pending entry regardless of idle time
+        xclaimMinIdleMs,
         ...entriesToClaim,
       )) as StreamEntry[];
 
@@ -460,8 +474,16 @@ const processPendingEntries = async (
 export const processPendingEntriesOnStartup = async (
   options: ReadMatchesOptions,
 ): Promise<MatchWithMeta[]> => {
-  const { redis, stream, consumerGroup, consumerName, readCount, onInvalid } =
-    options;
+  const {
+    redis,
+    stream,
+    consumerGroup,
+    consumerName,
+    readCount,
+    onInvalid,
+    maxEntries,
+    xclaimMinIdleMs,
+  } = options;
 
   return processPendingEntries(
     redis,
@@ -470,6 +492,8 @@ export const processPendingEntriesOnStartup = async (
     consumerName,
     readCount,
     onInvalid,
+    maxEntries,
+    xclaimMinIdleMs,
   );
 };
 

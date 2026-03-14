@@ -34,6 +34,7 @@ export const createMatch = (overrides?: Partial<Match>): Match => {
 
 /**
  * Creates a MatchWithMeta object with default values.
+ * Each call generates a unique stream entry id unless overridden.
  *
  * @param matchOverrides - Optional fields to override in the match payload.
  * @param metaOverrides - Optional fields to override in the meta information.
@@ -44,8 +45,9 @@ export const createMatchWithMeta = (
   metaOverrides?: Partial<Omit<MatchWithMeta, 'payload'>>,
 ): MatchWithMeta => {
   const match = createMatch(matchOverrides);
+  const uniqueId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const defaults: Omit<MatchWithMeta, 'payload'> = {
-    id: '12345-0',
+    id: uniqueId,
     stream: 'settlement:matches',
   };
 

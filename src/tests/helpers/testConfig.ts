@@ -32,6 +32,10 @@ export const createTestConfig = (overrides?: Partial<AppConfig>): AppConfig => {
     batchSize: 10,
     batchIntervalMs: 5000,
     pollIntervalMs: 200,
+    pendingReclaimIntervalMs: 60000,
+    xclaimMinIdleMs: 60000,
+    failureBackoffBaseMs: 1000,
+    failureBackoffMaxMs: 60000,
     settlementContractAddress:
       process.env.SETTLEMENT_CONTRACT_ADDRESS ||
       '0x0000000000000000000000000000000000000000',

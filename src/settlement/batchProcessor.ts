@@ -46,7 +46,10 @@ export class BatchProcessor {
   private readonly batchContext: SettlementBatchContext;
   private isRunning = false;
   private pollIntervalId: NodeJS.Timeout | null = null;
+  private pendingReclaimIntervalId: NodeJS.Timeout | null = null;
   private processingPromise: Promise<void> | null = null;
+  private consecutiveFailures = 0;
+  private nextRetryAt = 0;
 
   /**
    * Create a new batch processor.
@@ -96,13 +99,19 @@ export class BatchProcessor {
         pollIntervalMs: this.config.pollIntervalMs,
         batchSize: this.config.batchSize,
         batchIntervalMs: this.config.batchIntervalMs,
+        pendingReclaimIntervalMs: this.config.pendingReclaimIntervalMs,
       },
     );
 
-    // Start polling loop
+    // Start polling loop (reads new entries only)
     this.pollIntervalId = setInterval(() => {
       void this.poll();
     }, this.config.pollIntervalMs);
+
+    // Start pending reclaim timer (processes failed/abandoned entries on a longer interval)
+    this.pendingReclaimIntervalId = setInterval(() => {
+      void this.reclaimPending();
+    }, this.config.pendingReclaimIntervalMs);
 
     // Do an initial poll immediately
     void this.poll();
@@ -128,6 +137,12 @@ export class BatchProcessor {
     if (this.pollIntervalId) {
       clearInterval(this.pollIntervalId);
       this.pollIntervalId = null;
+    }
+
+    // Clear pending reclaim interval
+    if (this.pendingReclaimIntervalId) {
+      clearInterval(this.pendingReclaimIntervalId);
+      this.pendingReclaimIntervalId = null;
     }
 
     // Wait for any in-flight processing to complete
@@ -158,6 +173,11 @@ export class BatchProcessor {
       return;
     }
 
+    // If we're in backoff after a failure, skip until nextRetryAt
+    if (Date.now() < this.nextRetryAt) {
+      return;
+    }
+
     // If there's already a processing operation in flight, skip this poll
     if (this.processingPromise) {
       return;
@@ -176,19 +196,7 @@ export class BatchProcessor {
           );
         }
 
-        // First, try to process pending entries (retry failed matches)
-        const pendingMatches = await processPendingEntriesOnStartup(
-          this.readMatchesOptions,
-        );
-        if (pendingMatches.length > 0) {
-          this.accumulator.addMatches(pendingMatches);
-          // eslint-disable-next-line no-console
-          console.log(
-            `[batch-processor] Processed ${pendingMatches.length} pending matches, accumulator now has ${this.accumulator.getPendingCount()} pending`,
-          );
-        }
-
-        // Then, read new matches from stream
+        // Read new matches from stream only (pending reclaim runs on separate timer)
         const matches = await readMatches(this.readMatchesOptions);
         if (matches.length > 0) {
           this.accumulator.addMatches(matches);
@@ -245,6 +253,7 @@ export class BatchProcessor {
           duration,
         },
       );
+      this.consecutiveFailures = 0;
     } catch (error) {
       const duration = Date.now() - startTime;
 
@@ -295,7 +304,57 @@ export class BatchProcessor {
         );
       }
 
+      this.consecutiveFailures += 1;
+      const delay = Math.min(
+        this.config.failureBackoffBaseMs * Math.pow(2, this.consecutiveFailures - 1),
+        this.config.failureBackoffMaxMs,
+      );
+      this.nextRetryAt = Date.now() + delay;
+      // eslint-disable-next-line no-console
+      console.log(
+        `[batch-processor] Backing off for ${delay}ms (failure ${this.consecutiveFailures})`,
+      );
+
       throw error;
+    }
+  }
+
+  /**
+   * Reclaim pending entries (failed/abandoned matches) and add to accumulator.
+   * Runs on a separate timer at pendingReclaimIntervalMs to avoid loading
+   * unbounded entries on every poll cycle.
+   */
+  private async reclaimPending(): Promise<void> {
+    if (!this.isRunning) {
+      return;
+    }
+
+    try {
+      if (
+        this.redis.status !== 'ready' &&
+        this.redis.status !== 'connecting'
+      ) {
+        return;
+      }
+
+      const reclaimOptions = {
+        ...this.readMatchesOptions,
+        maxEntries: this.config.batchSize * 3,
+        xclaimMinIdleMs: this.config.xclaimMinIdleMs,
+      };
+      const pendingMatches = await processPendingEntriesOnStartup(
+        reclaimOptions,
+      );
+      if (pendingMatches.length > 0) {
+        this.accumulator.addMatches(pendingMatches);
+        // eslint-disable-next-line no-console
+        console.log(
+          `[batch-processor] Reclaimed ${pendingMatches.length} pending matches, accumulator now has ${this.accumulator.getPendingCount()} pending`,
+        );
+      }
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('[batch-processor] Error reclaiming pending entries', error);
     }
   }
 }

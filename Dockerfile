@@ -36,5 +36,5 @@ RUN chown -R node:node /app
 
 USER node
 
-CMD ["node", "dist/index.js"]
+CMD ["node", "--max-old-space-size=512", "dist/index.js"]
     
