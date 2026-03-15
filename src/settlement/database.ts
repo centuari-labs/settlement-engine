@@ -7,6 +7,7 @@ import type {
   ParsedLendPosition,
   ParsedBorrowPosition,
 } from './smartContract';
+import type { Match } from '../schemas/match';
 import {
   bytes32ToUuid,
   positionUuidFor,
@@ -39,6 +40,12 @@ export interface PersistSettlementResultsOptions {
    * Array of settlement results to persist.
    */
   readonly results: readonly SettlementResult[];
+  /**
+   * Map of matchId → Match payload for upserting match rows before settlement items.
+   * This ensures the foreign key constraint on settlement_items is satisfied
+   * even if the DB writer hasn't persisted the match yet.
+   */
+  readonly matchPayloads: ReadonlyMap<string, Match>;
   /**
    * Maximum number of retries for transient errors.
    */
@@ -400,6 +407,87 @@ const persistBorrowPositionCreated = async (
 };
 
 /**
+ * Upsert a match row to satisfy the foreign key constraint on settlement_items.
+ * Uses ON CONFLICT DO NOTHING so it's safe to call even if the DB writer has
+ * already persisted the match.
+ */
+const upsertMatch = async (
+  client: PoolClient,
+  matchId: string,
+  match: Match,
+): Promise<void> => {
+  // Look up asset by loanToken address
+  const assetRows = await client.query<{ id: string }>(
+    `SELECT id FROM assets WHERE LOWER(token_address) = LOWER($1) LIMIT 1`,
+    [match.loanToken],
+  );
+  const asset = assetRows.rows[0];
+  if (!asset) {
+    // eslint-disable-next-line no-console
+    console.warn(`[database] Asset not found for token ${match.loanToken}, skipping match upsert for ${matchId}`);
+    return;
+  }
+
+  // Look up lender account
+  const lenderRows = await client.query<{ id: string }>(
+    `SELECT id FROM accounts WHERE LOWER(user_wallet) = LOWER($1) LIMIT 1`,
+    [match.lenderWallet],
+  );
+  const lenderAccount = lenderRows.rows[0];
+  if (!lenderAccount) {
+    // eslint-disable-next-line no-console
+    console.warn(`[database] Lender account not found for wallet ${match.lenderWallet}, skipping match upsert for ${matchId}`);
+    return;
+  }
+
+  // Look up borrower account
+  const borrowerRows = await client.query<{ id: string }>(
+    `SELECT id FROM accounts WHERE LOWER(user_wallet) = LOWER($1) LIMIT 1`,
+    [match.borrowerWallet],
+  );
+  const borrowerAccount = borrowerRows.rows[0];
+  if (!borrowerAccount) {
+    // eslint-disable-next-line no-console
+    console.warn(`[database] Borrower account not found for wallet ${match.borrowerWallet}, skipping match upsert for ${matchId}`);
+    return;
+  }
+
+  await client.query(
+    `
+      INSERT INTO matches (
+        id, lend_order_market_id, borrow_order_market_id, asset_id,
+        lender_account_id, borrower_account_id, match_amount, rate,
+        is_borrower_taker, maker_fee, taker_fee,
+        lender_settlement_fee, borrower_settlement_fee,
+        maturity, created_at, updated_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+        to_timestamp($14 / 1000.0), to_timestamp($15 / 1000.0), to_timestamp($15 / 1000.0)
+      )
+      ON CONFLICT (id) DO NOTHING
+    `,
+    [
+      matchId,
+      match.lendOrderId,
+      match.borrowOrderId,
+      asset.id,
+      lenderAccount.id,
+      borrowerAccount.id,
+      match.matchedAmount,
+      match.rate,
+      match.borrowerIsTaker,
+      match.makerFeeAmount,
+      match.takerFeeAmount,
+      match.lenderSettlementFeeAmount,
+      match.borrowerSettlementFeeAmount,
+      match.maturity,
+      match.timestamp,
+    ],
+  );
+};
+
+/**
  * Persist settlement results to the database.
  *
  * Inserts settlement batches, settlement items, and processes parsed events
@@ -412,7 +500,7 @@ const persistBorrowPositionCreated = async (
 export const persistSettlementResults = async (
   options: PersistSettlementResultsOptions,
 ): Promise<void> => {
-  const { results, maxRetries = 3, retryDelayMs = 1000 } = options;
+  const { results, matchPayloads, maxRetries = 3, retryDelayMs = 1000 } = options;
 
   if (results.length === 0) {
     return;
@@ -445,6 +533,15 @@ export const persistSettlementResults = async (
           }
 
           const batchId = batchInsert.rows[0].id;
+
+          // Ensure match rows exist before inserting settlement items
+          // to avoid FK violation race condition with the DB writer.
+          for (const matchId of result.settledMatchIds) {
+            const matchPayload = matchPayloads.get(matchId);
+            if (matchPayload) {
+              await upsertMatch(client, matchId, matchPayload);
+            }
+          }
 
           // Insert settlement items for each settled match ID.
           for (const matchId of result.settledMatchIds) {

@@ -126,8 +126,13 @@ describe('persistSettlementResults Integration Tests', () => {
         borrowPositionEvents: [],
       };
 
+      const matchPayloads = new Map(
+        matches.map((m) => [m.matchId, m]),
+      );
+
       await persistSettlementResults({
         results: [settlementResult],
+        matchPayloads,
       });
 
       // Query the results

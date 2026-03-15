@@ -187,9 +187,17 @@ export const processSettlementBatch = async (
 
   try {
     // Step 2: Persist settlement results to database
+    // Build a map of matchId → Match payload so the persistence layer can
+    // upsert match rows before inserting settlement_items (avoids FK race
+    // condition with the DB writer).
+    const matchPayloads = new Map(
+      unsettled.map((m) => [m.payload.matchId, m.payload]),
+    );
+
     const startTime = Date.now();
     await persistSettlementResults({
       results: [settlementResult],
+      matchPayloads,
     });
     const duration = Date.now() - startTime;
 
