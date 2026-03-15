@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import {
   createWalletClient,
   createPublicClient,
@@ -441,7 +442,8 @@ let cachedWalletClient: ReturnType<typeof createWalletClient> | null = null;
 let cachedWalletKey: string | null = null;
 
 const getWalletClient = (config: AppConfig) => {
-  const key = `${config.ethereumChainId}|${config.ethereumRpcUrl}|${config.settlementPrivateKey}`;
+  const keyHash = createHash('sha256').update(config.settlementPrivateKey).digest('hex');
+  const key = `${config.ethereumChainId}|${config.ethereumRpcUrl}|${keyHash}`;
   if (cachedWalletClient && cachedWalletKey === key) {
     return cachedWalletClient;
   }
