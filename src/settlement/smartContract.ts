@@ -424,7 +424,7 @@ const createChainFromId = (chainId: number): Chain => {
 let cachedPublicClient: ReturnType<typeof createPublicClient> | null = null;
 let cachedClientKey: string | null = null;
 
-const getPublicClient = (config: AppConfig) => {
+export const getPublicClient = (config: AppConfig) => {
   const key = `${config.ethereumChainId}|${config.ethereumRpcUrl}`;
   if (cachedPublicClient && cachedClientKey === key) {
     return cachedPublicClient;

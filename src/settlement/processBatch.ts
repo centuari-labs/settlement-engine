@@ -185,19 +185,22 @@ export const processSettlementBatch = async (
     );
   }
 
-  try {
-    // Step 2: Persist settlement results to database
-    // Build a map of matchId → Match payload so the persistence layer can
-    // upsert match rows before inserting settlement_items (avoids FK race
-    // condition with the DB writer).
-    const matchPayloads = new Map(
-      unsettled.map((m) => [m.payload.matchId, m.payload]),
-    );
+  // Step 2: Persist settlement results to database (two-phase).
+  // Phase 1 inserts settlement records + raw events (must succeed).
+  // Phase 2 processes events into positions (can fail — recovery loop retries).
+  // Build a map of matchId → Match payload so the persistence layer can
+  // upsert match rows before inserting settlement_items (avoids FK race
+  // condition with the DB writer).
+  const matchPayloads = new Map(
+    unsettled.map((m) => [m.payload.matchId, m.payload]),
+  );
 
+  try {
     const startTime = Date.now();
     await persistSettlementResults({
       results: [settlementResult],
       matchPayloads,
+      config: config!,
     });
     const duration = Date.now() - startTime;
 
@@ -210,13 +213,16 @@ export const processSettlementBatch = async (
       },
     );
   } catch (error) {
+    // Phase 1 failed — settlement records not committed.
+    // This is critical: on-chain settlement succeeded but we can't persist the record.
+    // Do NOT ACK from Redis so the entries can be retried.
     const dbError = error as DatabaseError;
     const isRetryable =
       dbError.retryable !== undefined ? dbError.retryable : true;
 
     // eslint-disable-next-line no-console
     console.error(
-      `[process-settlement-batch] Database persistence failed`,
+      `[process-settlement-batch] Database persistence Phase 1 failed`,
       {
         error: dbError.message,
         code: dbError.code,
@@ -232,7 +238,9 @@ export const processSettlementBatch = async (
     );
   }
 
-  // Step 3: ACK and delete successfully settled entries from Redis
+  // Step 3: ACK and delete entries from Redis.
+  // Phase 1 committed settlement records + raw events, so even if Phase 2
+  // (event processing) failed, the data is safe and the recovery loop will retry.
   await ackAndDeleteEntries(context, unsettled);
 
   // Apply a length-based trim on the main settlement stream to enforce a

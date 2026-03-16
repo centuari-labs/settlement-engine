@@ -3,6 +3,7 @@ import { persistSettlementResults } from '../database';
 import type { SettlementResult } from '../smartContract';
 import { insertMatches } from '../../tests/helpers/databaseTestHelpers';
 import { createMatch } from '../../tests/helpers/testFixtures';
+import { createTestConfig } from '../../tests/helpers/testConfig';
 
 /**
  * Integration tests for PostgreSQL persistence.
@@ -133,6 +134,7 @@ describe('persistSettlementResults Integration Tests', () => {
       await persistSettlementResults({
         results: [settlementResult],
         matchPayloads,
+        config: createTestConfig(),
       });
 
       // Query the results

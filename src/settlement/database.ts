@@ -1,18 +1,38 @@
 import type { Pool, PoolClient } from 'pg';
 import { Pool as PgPool } from 'pg';
 import { z } from 'zod';
+import type { Address } from 'viem';
 import type {
   SettlementResult,
   ParsedBondToken,
   ParsedLendPosition,
   ParsedBorrowPosition,
 } from './smartContract';
+import { getPublicClient } from './smartContract';
 import type { Match } from '../schemas/match';
+import type { AppConfig } from '../config';
 import {
   bytes32ToUuid,
   positionUuidFor,
   cbtAssetUuidFor,
 } from './helpers';
+
+const erc20MetadataAbi = [
+  { type: 'function', name: 'name', inputs: [], outputs: [{ type: 'string' }], stateMutability: 'view' },
+  { type: 'function', name: 'symbol', inputs: [], outputs: [{ type: 'string' }], stateMutability: 'view' },
+] as const;
+
+async function fetchErc20Metadata(
+  config: AppConfig,
+  tokenAddress: string,
+): Promise<{ name: string; symbol: string }> {
+  const client = getPublicClient(config);
+  const [name, symbol] = await Promise.all([
+    client.readContract({ address: tokenAddress as Address, abi: erc20MetadataAbi, functionName: 'name' }),
+    client.readContract({ address: tokenAddress as Address, abi: erc20MetadataAbi, functionName: 'symbol' }),
+  ]);
+  return { name, symbol };
+}
 
 /**
  * Error information for failed database operations.
@@ -46,6 +66,10 @@ export interface PersistSettlementResultsOptions {
    * even if the DB writer hasn't persisted the match yet.
    */
   readonly matchPayloads: ReadonlyMap<string, Match>;
+  /**
+   * App configuration (needed for on-chain ERC20 metadata reads).
+   */
+  readonly config: AppConfig;
   /**
    * Maximum number of retries for transient errors.
    */
@@ -86,6 +110,15 @@ export interface SettlementItem {
 }
 
 /**
+ * Raw events stored alongside settlement batch for recovery.
+ */
+export interface RawSettlementEvents {
+  readonly bondTokenEvents: readonly ParsedBondToken[];
+  readonly lendPositionEvents: readonly ParsedLendPosition[];
+  readonly borrowPositionEvents: readonly ParsedBorrowPosition[];
+}
+
+/**
  * Zod schema for database URL validation.
  */
 const databaseUrlSchema = z.string().url('DATABASE_URL must be a valid URL');
@@ -101,7 +134,7 @@ let pool: Pool | null = null;
  * @returns Postgres connection pool.
  * @throws Error if DATABASE_URL is not set or invalid.
  */
-const getPool = (): Pool => {
+export const getPool = (): Pool => {
   if (pool) {
     return pool;
   }
@@ -259,6 +292,7 @@ const executeWithRetry = async <T>(
 
 /**
  * Persist BondTokenCreated event: ensure market and cbt_asset exist.
+ * Throws if required lookups fail so the caller can handle the error.
  */
 const persistBondTokenCreated = async (
   client: PoolClient,
@@ -266,14 +300,19 @@ const persistBondTokenCreated = async (
   batchId: string,
 ): Promise<void> => {
   const marketIdUuid = bytes32ToUuid(ev.marketId);
+  const loanTokenLower = ev.loanToken.toLowerCase();
 
   // Look up asset by loanToken address
   const assetRows = await client.query<{ id: string }>(
     `SELECT id FROM assets WHERE LOWER(token_address) = LOWER($1) LIMIT 1`,
-    [ev.loanToken],
+    [loanTokenLower],
   );
   const asset = assetRows.rows[0];
-  if (!asset) return;
+  if (!asset) {
+    throw new Error(
+      `[database] Asset not found for loanToken ${loanTokenLower}, cannot create market ${marketIdUuid} for BondTokenCreated event`,
+    );
+  }
 
   // Upsert market (insert if not exists)
   await client.query(
@@ -286,7 +325,8 @@ const persistBondTokenCreated = async (
   );
 
   // Upsert cbt_asset
-  const cbtAssetId = cbtAssetUuidFor(ev.marketId, ev.bondToken);
+  const bondTokenLower = ev.bondToken.toLowerCase();
+  const cbtAssetId = cbtAssetUuidFor(ev.marketId, bondTokenLower);
   await client.query(
     `
       INSERT INTO cbt_assets (id, market_id, name, symbol, token_address, settlement_batch_id, created_at, updated_at)
@@ -298,41 +338,74 @@ const persistBondTokenCreated = async (
         settlement_batch_id = EXCLUDED.settlement_batch_id,
         updated_at = NOW()
     `,
-    [cbtAssetId, marketIdUuid, ev.name, ev.symbol, ev.bondToken, batchId],
+    [cbtAssetId, marketIdUuid, ev.name, ev.symbol, bondTokenLower, batchId],
   );
 };
 
 /**
  * Persist LendPositionCreated event: upsert lend_position.
+ * Throws if required lookups fail so the caller can handle the error.
  */
 const persistLendPositionCreated = async (
   client: PoolClient,
   ev: ParsedLendPosition,
   batchId: string,
+  config: AppConfig,
 ): Promise<void> => {
   const marketIdUuid = bytes32ToUuid(ev.marketId);
-  const positionId = positionUuidFor(ev.marketId, ev.lender);
+  const lenderLower = ev.lender.toLowerCase();
+  const positionId = positionUuidFor(ev.marketId, lenderLower);
 
   const accountRows = await client.query<{ id: string }>(
     `SELECT id FROM accounts WHERE LOWER(user_wallet) = LOWER($1) LIMIT 1`,
-    [ev.lender],
+    [lenderLower],
   );
   const account = accountRows.rows[0];
-  if (!account) return;
+  if (!account) {
+    throw new Error(
+      `[database] Account not found for lender ${lenderLower}, cannot create LendPosition for market ${marketIdUuid}`,
+    );
+  }
 
   const marketRows = await client.query<{ asset_id: string }>(
     `SELECT asset_id FROM markets WHERE id = $1 LIMIT 1`,
     [marketIdUuid],
   );
   const market = marketRows.rows[0];
-  if (!market) return;
+  if (!market) {
+    throw new Error(
+      `[database] Market not found for id ${marketIdUuid}, cannot create LendPosition for lender ${lenderLower}`,
+    );
+  }
 
+  const bondTokenLower = ev.bondToken.toLowerCase();
   const cbtAssetRows = await client.query<{ id: string }>(
     `SELECT id FROM cbt_assets WHERE LOWER(token_address) = LOWER($1) AND market_id = $2 LIMIT 1`,
-    [ev.bondToken, marketIdUuid],
+    [bondTokenLower, marketIdUuid],
   );
-  const cbtAsset = cbtAssetRows.rows[0];
-  const cbtAssetId = cbtAsset?.id ?? null;
+  let cbtAssetId: string;
+  if (cbtAssetRows.rows[0]) {
+    cbtAssetId = cbtAssetRows.rows[0].id;
+  } else {
+    // CBT asset not found — fetch ERC20 metadata on-chain and create it
+    // eslint-disable-next-line no-console
+    console.log(
+      `[database] CBT asset not found for bondToken ${bondTokenLower} in market ${marketIdUuid}, fetching ERC20 metadata on-chain`,
+    );
+    const metadata = await fetchErc20Metadata(config, bondTokenLower);
+    cbtAssetId = cbtAssetUuidFor(ev.marketId, bondTokenLower);
+    await client.query(
+      `INSERT INTO cbt_assets (id, market_id, name, symbol, token_address, settlement_batch_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name,
+         symbol = EXCLUDED.symbol,
+         token_address = EXCLUDED.token_address,
+         settlement_batch_id = EXCLUDED.settlement_batch_id,
+         updated_at = NOW()`,
+      [cbtAssetId, marketIdUuid, metadata.name, metadata.symbol, bondTokenLower, batchId],
+    );
+  }
 
   const cbtAmount = Number(ev.cbtAmount);
   const principal = Number(ev.principal);
@@ -365,6 +438,7 @@ const persistLendPositionCreated = async (
 
 /**
  * Persist BorrowPositionCreated event: upsert borrow_position.
+ * Throws if required lookups fail so the caller can handle the error.
  */
 const persistBorrowPositionCreated = async (
   client: PoolClient,
@@ -372,21 +446,30 @@ const persistBorrowPositionCreated = async (
   batchId: string,
 ): Promise<void> => {
   const marketIdUuid = bytes32ToUuid(ev.marketId);
-  const positionId = positionUuidFor(ev.marketId, ev.borrower);
+  const borrowerLower = ev.borrower.toLowerCase();
+  const positionId = positionUuidFor(ev.marketId, borrowerLower);
 
   const accountRows = await client.query<{ id: string }>(
     `SELECT id FROM accounts WHERE LOWER(user_wallet) = LOWER($1) LIMIT 1`,
-    [ev.borrower],
+    [borrowerLower],
   );
   const account = accountRows.rows[0];
-  if (!account) return;
+  if (!account) {
+    throw new Error(
+      `[database] Account not found for borrower ${borrowerLower}, cannot create BorrowPosition for market ${marketIdUuid}`,
+    );
+  }
 
   const marketRows = await client.query<{ asset_id: string }>(
     `SELECT asset_id FROM markets WHERE id = $1 LIMIT 1`,
     [marketIdUuid],
   );
   const market = marketRows.rows[0];
-  if (!market) return;
+  if (!market) {
+    throw new Error(
+      `[database] Market not found for id ${marketIdUuid}, cannot create BorrowPosition for borrower ${borrowerLower}`,
+    );
+  }
 
   const principal = Number(ev.principal);
   const debt = Number(ev.debt);
@@ -416,39 +499,43 @@ const upsertMatch = async (
   matchId: string,
   match: Match,
 ): Promise<void> => {
+  const loanTokenLower = match.loanToken.toLowerCase();
+  const lenderWalletLower = match.lenderWallet.toLowerCase();
+  const borrowerWalletLower = match.borrowerWallet.toLowerCase();
+
   // Look up asset by loanToken address
   const assetRows = await client.query<{ id: string }>(
     `SELECT id FROM assets WHERE LOWER(token_address) = LOWER($1) LIMIT 1`,
-    [match.loanToken],
+    [loanTokenLower],
   );
   const asset = assetRows.rows[0];
   if (!asset) {
     // eslint-disable-next-line no-console
-    console.warn(`[database] Asset not found for token ${match.loanToken}, skipping match upsert for ${matchId}`);
+    console.warn(`[database] Asset not found for token ${loanTokenLower}, skipping match upsert for ${matchId}`);
     return;
   }
 
   // Look up lender account
   const lenderRows = await client.query<{ id: string }>(
     `SELECT id FROM accounts WHERE LOWER(user_wallet) = LOWER($1) LIMIT 1`,
-    [match.lenderWallet],
+    [lenderWalletLower],
   );
   const lenderAccount = lenderRows.rows[0];
   if (!lenderAccount) {
     // eslint-disable-next-line no-console
-    console.warn(`[database] Lender account not found for wallet ${match.lenderWallet}, skipping match upsert for ${matchId}`);
+    console.warn(`[database] Lender account not found for wallet ${lenderWalletLower}, skipping match upsert for ${matchId}`);
     return;
   }
 
   // Look up borrower account
   const borrowerRows = await client.query<{ id: string }>(
     `SELECT id FROM accounts WHERE LOWER(user_wallet) = LOWER($1) LIMIT 1`,
-    [match.borrowerWallet],
+    [borrowerWalletLower],
   );
   const borrowerAccount = borrowerRows.rows[0];
   if (!borrowerAccount) {
     // eslint-disable-next-line no-console
-    console.warn(`[database] Borrower account not found for wallet ${match.borrowerWallet}, skipping match upsert for ${matchId}`);
+    console.warn(`[database] Borrower account not found for wallet ${borrowerWalletLower}, skipping match upsert for ${matchId}`);
     return;
   }
 
@@ -488,19 +575,56 @@ const upsertMatch = async (
 };
 
 /**
- * Persist settlement results to the database.
+ * Process settlement events (bond tokens, lend positions, borrow positions)
+ * for a single batch. This is separated from record persistence so it can
+ * be retried independently via the recovery loop.
+ */
+const processSettlementEvents = async (
+  client: PoolClient,
+  batchId: string,
+  events: RawSettlementEvents,
+  config: AppConfig,
+): Promise<void> => {
+  // Step A: BondTokenCreated -> markets + cbt_assets (must run first)
+  for (const ev of events.bondTokenEvents) {
+    await persistBondTokenCreated(client, ev, batchId);
+  }
+
+  // Step B: LendPositionCreated -> lend_positions
+  for (const ev of events.lendPositionEvents) {
+    await persistLendPositionCreated(client, ev, batchId, config);
+  }
+
+  // Step C: BorrowPositionCreated -> borrow_positions
+  for (const ev of events.borrowPositionEvents) {
+    await persistBorrowPositionCreated(client, ev, batchId);
+  }
+
+  // Mark batch as processed
+  await client.query(
+    `UPDATE settlement_batches SET events_processed = true, updated_at = NOW() WHERE id = $1`,
+    [batchId],
+  );
+};
+
+/**
+ * Persist settlement results to the database using two-phase approach.
  *
- * Inserts settlement batches, settlement items, and processes parsed events
- * (BondTokenCreated, LendPositionCreated, BorrowPositionCreated) in dependency order.
+ * Phase 1 (Transaction 1): Inserts settlement batches, matches, settlement items,
+ * and stores raw events as JSON. This always commits so settlement records are never lost.
+ *
+ * Phase 2 (Transaction 2): Processes events into positions (markets, cbt_assets,
+ * lend_positions, borrow_positions). If this fails, the raw events are stored in
+ * Phase 1 and can be retried via the recovery loop.
  *
  * @param options - Options for persisting settlement results.
  * @returns Promise that resolves when persistence is complete.
- * @throws DatabaseError if the persistence fails.
+ * @throws DatabaseError if Phase 1 fails.
  */
 export const persistSettlementResults = async (
   options: PersistSettlementResultsOptions,
 ): Promise<void> => {
-  const { results, matchPayloads, maxRetries = 3, retryDelayMs = 1000 } = options;
+  const { results, matchPayloads, config, maxRetries = 3, retryDelayMs = 1000 } = options;
 
   if (results.length === 0) {
     return;
@@ -512,20 +636,28 @@ export const persistSettlementResults = async (
     transactionHashes: results.map((result) => result.transactionHash),
   });
 
+  // Phase 1: Persist settlement records + raw events (must succeed)
+  const batchIds: { batchId: string; events: RawSettlementEvents }[] = [];
+
   await executeWithRetry(
     () =>
       withTransaction(async (client) => {
-        // Insert one settlement batch per settlement result.
         for (const result of results) {
+          const rawEvents: RawSettlementEvents = {
+            bondTokenEvents: result.bondTokenEvents,
+            lendPositionEvents: result.lendPositionEvents,
+            borrowPositionEvents: result.borrowPositionEvents,
+          };
+
           const batchInsert = await client.query<{
             id: string;
           }>(
             `
-              INSERT INTO settlement_batches (tx_hash, status, created_at, updated_at)
-              VALUES ($1, $2, NOW(), NOW())
+              INSERT INTO settlement_batches (tx_hash, status, raw_events, events_processed, created_at, updated_at)
+              VALUES ($1, $2, $3, false, NOW(), NOW())
               RETURNING id
             `,
-            [result.transactionHash, 'COMPLETED'],
+            [result.transactionHash, 'COMPLETED', JSON.stringify(rawEvents, (_, v) => typeof v === 'bigint' ? v.toString() : v)],
           );
 
           if (batchInsert.rows.length === 0) {
@@ -535,7 +667,6 @@ export const persistSettlementResults = async (
           const batchId = batchInsert.rows[0].id;
 
           // Ensure match rows exist before inserting settlement items
-          // to avoid FK violation race condition with the DB writer.
           for (const matchId of result.settledMatchIds) {
             const matchPayload = matchPayloads.get(matchId);
             if (matchPayload) {
@@ -554,20 +685,7 @@ export const persistSettlementResults = async (
             );
           }
 
-          // Step A: BondTokenCreated -> markets + cbt_assets (must run first)
-          for (const ev of result.bondTokenEvents) {
-            await persistBondTokenCreated(client, ev, batchId);
-          }
-
-          // Step B: LendPositionCreated -> lend_positions
-          for (const ev of result.lendPositionEvents) {
-            await persistLendPositionCreated(client, ev, batchId);
-          }
-
-          // Step C: BorrowPositionCreated -> borrow_positions
-          for (const ev of result.borrowPositionEvents) {
-            await persistBorrowPositionCreated(client, ev, batchId);
-          }
+          batchIds.push({ batchId, events: rawEvents });
         }
       }),
     maxRetries,
@@ -575,8 +693,79 @@ export const persistSettlementResults = async (
   );
 
   // eslint-disable-next-line no-console
-  console.log('[database] Settlement results persisted successfully', {
+  console.log('[database] Phase 1 complete: settlement records persisted', {
     batchCount: results.length,
+    batchIds: batchIds.map((b) => b.batchId),
   });
+
+  // Phase 2: Process events into positions (can fail — data is safe in raw_events)
+  for (const { batchId, events } of batchIds) {
+    try {
+      await withTransaction(async (client) => {
+        await processSettlementEvents(client, batchId, events, config);
+      });
+
+      // eslint-disable-next-line no-console
+      console.log('[database] Phase 2 complete: events processed for batch', {
+        batchId,
+        bondTokenEvents: events.bondTokenEvents.length,
+        lendPositionEvents: events.lendPositionEvents.length,
+        borrowPositionEvents: events.borrowPositionEvents.length,
+      });
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[database] Phase 2 failed for batch ${batchId}: event processing failed. Raw events are stored for recovery.`,
+        {
+          batchId,
+          error: error instanceof Error ? error.message : String(error),
+          bondTokenEvents: events.bondTokenEvents.length,
+          lendPositionEvents: events.lendPositionEvents.length,
+          borrowPositionEvents: events.borrowPositionEvents.length,
+        },
+      );
+      // Do NOT rethrow — Phase 1 data is committed, recovery loop will retry.
+    }
+  }
 };
 
+/**
+ * Find settlement batches where event processing has not completed.
+ * Used by the recovery loop to retry failed event processing.
+ *
+ * @param limit - Maximum number of unprocessed batches to fetch.
+ * @returns Array of unprocessed batches with their raw events.
+ */
+export const findUnprocessedSettlementBatches = async (
+  limit = 10,
+): Promise<{ id: string; rawEvents: RawSettlementEvents }[]> => {
+  const pool = getPool();
+  const result = await pool.query<{ id: string; raw_events: RawSettlementEvents }>(
+    `SELECT id, raw_events FROM settlement_batches WHERE events_processed = false AND raw_events IS NOT NULL ORDER BY created_at ASC LIMIT $1`,
+    [limit],
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    rawEvents: typeof row.raw_events === 'string'
+      ? JSON.parse(row.raw_events)
+      : row.raw_events,
+  }));
+};
+
+/**
+ * Retry event processing for a single unprocessed settlement batch.
+ *
+ * @param batchId - Settlement batch ID.
+ * @param rawEvents - Raw events to process.
+ * @throws Error if event processing fails.
+ */
+export const retryEventProcessing = async (
+  batchId: string,
+  rawEvents: RawSettlementEvents,
+  config: AppConfig,
+): Promise<void> => {
+  await withTransaction(async (client) => {
+    await processSettlementEvents(client, batchId, rawEvents, config);
+  });
+};

@@ -11,6 +11,10 @@ import {
   type SettlementBatchContext,
   BatchProcessingError,
 } from './processBatch';
+import {
+  findUnprocessedSettlementBatches,
+  retryEventProcessing,
+} from './database';
 
 /**
  * Options for creating a batch processor.
@@ -47,6 +51,7 @@ export class BatchProcessor {
   private isRunning = false;
   private pollIntervalId: NodeJS.Timeout | null = null;
   private pendingReclaimIntervalId: NodeJS.Timeout | null = null;
+  private eventRecoveryIntervalId: NodeJS.Timeout | null = null;
   private processingPromise: Promise<void> | null = null;
   private consecutiveFailures = 0;
   private nextRetryAt = 0;
@@ -113,6 +118,12 @@ export class BatchProcessor {
       void this.reclaimPending();
     }, this.config.pendingReclaimIntervalMs);
 
+    // Start event recovery timer (retries failed event processing every 60s)
+    const EVENT_RECOVERY_INTERVAL_MS = 60_000;
+    this.eventRecoveryIntervalId = setInterval(() => {
+      void this.recoverUnprocessedEvents();
+    }, EVENT_RECOVERY_INTERVAL_MS);
+
     // Do an initial poll immediately
     void this.poll();
   }
@@ -143,6 +154,12 @@ export class BatchProcessor {
     if (this.pendingReclaimIntervalId) {
       clearInterval(this.pendingReclaimIntervalId);
       this.pendingReclaimIntervalId = null;
+    }
+
+    // Clear event recovery interval
+    if (this.eventRecoveryIntervalId) {
+      clearInterval(this.eventRecoveryIntervalId);
+      this.eventRecoveryIntervalId = null;
     }
 
     // Wait for any in-flight processing to complete
@@ -355,6 +372,53 @@ export class BatchProcessor {
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('[batch-processor] Error reclaiming pending entries', error);
+    }
+  }
+
+  /**
+   * Recover unprocessed settlement events.
+   * Finds settlement batches where event processing failed (events_processed = false)
+   * and retries processing their stored raw events.
+   */
+  private async recoverUnprocessedEvents(): Promise<void> {
+    if (!this.isRunning) {
+      return;
+    }
+
+    try {
+      const unprocessed = await findUnprocessedSettlementBatches(10);
+
+      if (unprocessed.length === 0) {
+        return;
+      }
+
+      // eslint-disable-next-line no-console
+      console.log(
+        `[batch-processor] Found ${unprocessed.length} unprocessed settlement batches, retrying event processing`,
+      );
+
+      for (const batch of unprocessed) {
+        try {
+          await retryEventProcessing(batch.id, batch.rawEvents, this.config);
+
+          // eslint-disable-next-line no-console
+          console.log(
+            `[batch-processor] Successfully recovered events for batch ${batch.id}`,
+          );
+        } catch (error) {
+          // eslint-disable-next-line no-console
+          console.error(
+            `[batch-processor] Failed to recover events for batch ${batch.id}`,
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+          // Continue with other batches — don't let one failure block the rest
+        }
+      }
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('[batch-processor] Error in event recovery loop', error);
     }
   }
 }
