@@ -11,6 +11,7 @@ import { matchSchema } from '../../schemas/match';
 export const createMatch = (overrides?: Partial<Match>): Match => {
   const defaults: Match = {
     matchId: '550e8400-e29b-41d4-a716-446655440000',
+    marketId: '660e8400-e29b-41d4-a716-446655440099',
     lendOrderId: '550e8400-e29b-41d4-a716-446655440001',
     borrowOrderId: '550e8400-e29b-41d4-a716-446655440002',
     lenderWallet: '0x1234567890123456789012345678901234567890',

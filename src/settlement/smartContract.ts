@@ -172,6 +172,7 @@ const SETTLEMENT_CONTRACT_ABI = [
         type: 'tuple[]',
         components: [
           { name: 'matchId', type: 'bytes32' },
+          { name: 'marketId', type: 'bytes32' },
           { name: 'lendOrderId', type: 'bytes32' },
           { name: 'borrowOrderId', type: 'bytes32' },
           { name: 'lender', type: 'address' },
@@ -237,6 +238,22 @@ const uuidToBytes32 = (uuid: string): Hash => {
 };
 
 /**
+ * Converts a UUID string directly to a bytes32 value by stripping dashes
+ * and zero-padding to 64 hex chars. This is NOT keccak-hashed, so
+ * bytes32ToUuid(uuidToBytes32Direct(uuid)) === uuid.
+ *
+ * Used only for marketId to ensure the on-chain bytes32 round-trips
+ * back to the original backend UUID.
+ *
+ * @param uuid - UUID string to convert.
+ * @returns bytes32 zero-padded hex of the UUID.
+ */
+const uuidToBytes32Direct = (uuid: string): Hash => {
+  const hex = uuid.replace(/-/g, '');
+  return `0x${hex.padEnd(64, '0')}` as Hash;
+};
+
+/**
  * Transforms a Match object to the contract's MatchData struct format.
  *
  * @param match - Match object to transform.
@@ -245,6 +262,7 @@ const uuidToBytes32 = (uuid: string): Hash => {
 const transformMatchToContractFormat = (match: Match) => {
   return {
     matchId: uuidToBytes32(match.matchId),
+    marketId: uuidToBytes32Direct(match.marketId),
     lendOrderId: uuidToBytes32(match.lendOrderId),
     borrowOrderId: uuidToBytes32(match.borrowOrderId),
     lender: match.lenderWallet as Address,

@@ -114,6 +114,8 @@ describe('readMatches', () => {
       '*',
       'matchId',
       match.matchId,
+      'marketId',
+      match.marketId,
       'lendOrderId',
       match.lendOrderId,
       'borrowOrderId',
