@@ -575,6 +575,73 @@ const upsertMatch = async (
 };
 
 /**
+ * Update portfolio balances for all matches in a settled batch.
+ *
+ * For each match:
+ * - Lender: deduct (matchedAmount + lenderSettlementFee) from amount,
+ *           release the same from locked_amount
+ * - Borrower: add (matchedAmount - borrowerSettlementFee) to amount (upsert)
+ */
+const updatePortfolioForBatch = async (
+  client: PoolClient,
+  batchId: string,
+): Promise<void> => {
+  const matchRows = await client.query<{
+    match_amount: string;
+    lender_settlement_fee: string;
+    borrower_settlement_fee: string;
+    lender_account_id: string;
+    borrower_account_id: string;
+    asset_id: string;
+  }>(
+    `
+    SELECT m.match_amount, m.lender_settlement_fee, m.borrower_settlement_fee,
+           m.lender_account_id, m.borrower_account_id, m.asset_id
+    FROM settlement_items si
+    JOIN matches m ON m.id = si.match_id
+    WHERE si.settlement_batch_id = $1
+    `,
+    [batchId],
+  );
+
+  for (const row of matchRows.rows) {
+    // Deduct from lender: amount -= (matchedAmount + settlementFee), unlock locked_amount
+    await client.query(
+      `
+      UPDATE portfolio
+      SET amount = amount - ($1::numeric + $2::numeric),
+          locked_amount = GREATEST(0, locked_amount - ($1::numeric + $2::numeric)),
+          updated_at = NOW()
+      WHERE account_id = $3 AND asset_id = $4
+      `,
+      [
+        row.match_amount,
+        row.lender_settlement_fee,
+        row.lender_account_id,
+        row.asset_id,
+      ],
+    );
+
+    // Add to borrower: amount += (matchedAmount - settlementFee), upsert
+    await client.query(
+      `
+      INSERT INTO portfolio (id, account_id, asset_id, amount, locked_amount, is_collateral)
+      VALUES (gen_random_uuid(), $1, $2, $3::numeric - $4::numeric, 0, false)
+      ON CONFLICT (account_id, asset_id) DO UPDATE SET
+        amount = portfolio.amount + ($3::numeric - $4::numeric),
+        updated_at = NOW()
+      `,
+      [
+        row.borrower_account_id,
+        row.asset_id,
+        row.match_amount,
+        row.borrower_settlement_fee,
+      ],
+    );
+  }
+};
+
+/**
  * Process settlement events (bond tokens, lend positions, borrow positions)
  * for a single batch. This is separated from record persistence so it can
  * be retried independently via the recovery loop.
@@ -599,6 +666,9 @@ const processSettlementEvents = async (
   for (const ev of events.borrowPositionEvents) {
     await persistBorrowPositionCreated(client, ev, batchId);
   }
+
+  // Step D: Update portfolio balances for settled matches
+  await updatePortfolioForBatch(client, batchId);
 
   // Mark batch as processed
   await client.query(
