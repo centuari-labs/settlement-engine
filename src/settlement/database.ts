@@ -409,15 +409,20 @@ const persistLendPositionCreated = async (
 
   const cbtAmount = Number(ev.cbtAmount);
   const principal = Number(ev.principal);
+  const rate = Number(ev.rate);
 
   await client.query(
     `
-      INSERT INTO lend_positions (id, account_id, asset_id, market_id, cbt_asset_id, settlement_batch_id, shares, original_shares, amount, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+      INSERT INTO lend_positions (id, account_id, asset_id, market_id, cbt_asset_id, settlement_batch_id, shares, original_shares, amount, apr, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
       ON CONFLICT (id) DO UPDATE SET
         cbt_asset_id = COALESCE(EXCLUDED.cbt_asset_id, lend_positions.cbt_asset_id),
         shares = lend_positions.shares + EXCLUDED.shares,
         original_shares = lend_positions.original_shares + EXCLUDED.original_shares,
+        apr = CASE WHEN (lend_positions.amount + EXCLUDED.amount) > 0
+              THEN (lend_positions.amount * lend_positions.apr + EXCLUDED.amount * EXCLUDED.apr)
+                   / (lend_positions.amount + EXCLUDED.amount)
+              ELSE EXCLUDED.apr END,
         amount = lend_positions.amount + EXCLUDED.amount,
         settlement_batch_id = EXCLUDED.settlement_batch_id,
         updated_at = NOW()
@@ -432,6 +437,7 @@ const persistLendPositionCreated = async (
       cbtAmount,
       cbtAmount,
       principal,
+      rate,
     ],
   );
 };
@@ -473,19 +479,24 @@ const persistBorrowPositionCreated = async (
 
   const principal = Number(ev.principal);
   const debt = Number(ev.debt);
+  const rate = Number(ev.rate);
 
   await client.query(
     `
-      INSERT INTO borrow_positions (id, account_id, asset_id, market_id, settlement_batch_id, amount, original_debt, debt, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+      INSERT INTO borrow_positions (id, account_id, asset_id, market_id, settlement_batch_id, amount, original_debt, debt, apr, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
       ON CONFLICT (id) DO UPDATE SET
         original_debt = borrow_positions.original_debt + EXCLUDED.original_debt,
         debt = borrow_positions.debt + EXCLUDED.debt,
+        apr = CASE WHEN (borrow_positions.amount + EXCLUDED.amount) > 0
+              THEN (borrow_positions.amount * borrow_positions.apr + EXCLUDED.amount * EXCLUDED.apr)
+                   / (borrow_positions.amount + EXCLUDED.amount)
+              ELSE EXCLUDED.apr END,
         amount = borrow_positions.amount + EXCLUDED.amount,
         settlement_batch_id = EXCLUDED.settlement_batch_id,
         updated_at = NOW()
     `,
-    [positionId, account.id, market.asset_id, marketIdUuid, batchId, principal, debt, debt],
+    [positionId, account.id, market.asset_id, marketIdUuid, batchId, principal, debt, debt, rate],
   );
 };
 

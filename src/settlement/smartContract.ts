@@ -42,6 +42,7 @@ export interface ParsedLendPosition {
   readonly bondToken: string;
   readonly cbtAmount: bigint;
   readonly principal: bigint;
+  readonly rate: bigint;
 }
 
 /**
@@ -526,6 +527,7 @@ const parseReceiptLogs = (logs: readonly { topics: readonly `0x${string}`[]; dat
           bondToken: (decoded.args.bondToken as string).toLowerCase(),
           cbtAmount: decoded.args.cbtAmount,
           principal: decoded.args.principal,
+          rate: decoded.args.rate,
         });
       }
     } catch {
