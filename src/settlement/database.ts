@@ -415,7 +415,7 @@ const persistLendPositionCreated = async (
     `
       INSERT INTO lend_positions (id, account_id, asset_id, market_id, cbt_asset_id, settlement_batch_id, shares, original_shares, amount, apr, created_at, updated_at)
       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-      ON CONFLICT (settlement_batch_id, account_id, market_id) DO NOTHING
+      ON CONFLICT (settlement_batch_id, account_id, market_id, apr, amount) DO NOTHING
     `,
     [
       account.id,
@@ -475,7 +475,7 @@ const persistBorrowPositionCreated = async (
     `
       INSERT INTO borrow_positions (id, account_id, asset_id, market_id, settlement_batch_id, amount, original_debt, debt, apr, created_at, updated_at)
       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
-      ON CONFLICT (settlement_batch_id, account_id, market_id) DO NOTHING
+      ON CONFLICT (settlement_batch_id, account_id, market_id, apr, amount) DO NOTHING
     `,
     [account.id, market.asset_id, marketIdUuid, batchId, principal, debt, debt, rate],
   );
