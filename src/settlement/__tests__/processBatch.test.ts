@@ -1,17 +1,15 @@
-import type Redis from 'ioredis';
-import { processSettlementBatch, type SettlementBatchContext } from '../processBatch';
+import { processSettlementBatch, BatchProcessingError, type SettlementBatchContext } from '../processBatch';
 import {
   createMatch,
   createMatchBatch,
   createMatchWithMeta,
 } from '../../tests/helpers/testFixtures';
-import { getRedisClient, closeRedisClient } from '../../redis/client';
-import { cleanupTestStreams } from '../../tests/helpers/redisTestClient';
-import { createTestConfig } from '../../tests/helpers/testConfig';
 import { persistSettlementResults } from '../database';
-import { setupMockSettleBatch, getMockSettleBatch } from '../../tests/helpers/mockSmartContract';
+import { setupMockSettleBatch, setupMockSettleBatchError, createSettlementError, getMockSettleBatch } from '../../tests/helpers/mockSmartContract';
+import type { AppConfig } from '../../config';
+import { createTestConfig } from '../../tests/helpers/testConfig';
 
-// Mock database to avoid random failures
+// Mock database to avoid actual DB calls
 jest.mock('../database');
 
 const mockSettleBatch = getMockSettleBatch();
@@ -20,121 +18,74 @@ const mockPersistSettlementResults = persistSettlementResults as jest.MockedFunc
 >;
 
 /**
- * Integration tests for batch settlement processing using a real Redis instance.
- * These tests verify Redis stream operations (xdel, xtrim) work correctly with actual Redis.
- *
- * @requires Redis server running (default: localhost:6379, or set REDIS_TEST_URL)
+ * Unit tests for processSettlementBatch.
+ * All Redis interactions are mocked — no live Redis required.
  */
 describe('processSettlementBatch', () => {
-  let redis: Redis;
   let context: SettlementBatchContext;
-  let testStream: string;
-  let testConfig: ReturnType<typeof createTestConfig>;
+  let testConfig: AppConfig;
+  let mockRedis: {
+    xack: jest.Mock;
+    xdel: jest.Mock;
+    xtrim: jest.Mock;
+  };
   let consoleLogSpy: jest.SpyInstance;
+  let consoleErrorSpy: jest.SpyInstance;
 
-  beforeAll(async () => {
-    // Test Redis connection before running tests using the real client factory
-    const testConfig = createTestConfig();
-    redis = getRedisClient(testConfig);
-    try {
-      await redis.ping();
-    } catch (error) {
-      throw new Error(
-        'Redis is not available. Please start Redis or set REDIS_TEST_URL environment variable.',
-      );
-    }
-    // Close the test connection
-    await closeRedisClient();
-  });
-
-  beforeEach(async () => {
-    // Reset mocks
+  beforeEach(() => {
     jest.clearAllMocks();
 
-    // Use the real Redis client factory for each test
-    testStream = `test:settlement:matches:${Date.now()}`;
-    testConfig = createTestConfig({
-      settlementMatchesStream: testStream,
-    });
-    redis = getRedisClient(testConfig);
+    mockRedis = {
+      xack: jest.fn().mockResolvedValue(1),
+      xdel: jest.fn().mockResolvedValue(1),
+      xtrim: jest.fn().mockResolvedValue(0),
+    };
+
+    const testStream = 'test:settlement:matches';
+    testConfig = createTestConfig({ settlementMatchesStream: testStream });
+
     context = {
-      redis,
+      redis: mockRedis as any,
       stream: testStream,
-      consumerGroup: testConfig.consumerGroup,
+      consumerGroup: 'test-group',
       streamMaxLen: 10000,
     };
-    consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
 
-    // Set up default successful mocks using the mock helper
+    consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
+    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+
     setupMockSettleBatch(mockSettleBatch);
     mockPersistSettlementResults.mockResolvedValue(undefined);
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     consoleLogSpy.mockRestore();
-    // Clean up test streams
-    await cleanupTestStreams(redis, [testStream]);
-    // Close the Redis client to reset singleton for next test
-    await closeRedisClient();
+    consoleErrorSpy.mockRestore();
   });
 
   it('should return early for empty batch', async () => {
-    // Add an entry to stream to verify it's not affected
-    await redis.xadd(
-      context.stream,
-      '*',
-      'data',
-      JSON.stringify(createMatch()),
-    );
-
     await processSettlementBatch([], context, testConfig);
 
-    // Empty batch returns early without logging
-    expect(consoleLogSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining('[process-settlement-batch]'),
-      expect.anything(),
-    );
-
-    // Stream should still have the entry (not deleted)
-    const length = await redis.xlen(context.stream);
-    expect(length).toBe(1);
+    expect(mockSettleBatch).not.toHaveBeenCalled();
+    expect(mockPersistSettlementResults).not.toHaveBeenCalled();
+    expect(mockRedis.xack).not.toHaveBeenCalled();
+    expect(mockRedis.xdel).not.toHaveBeenCalled();
   });
 
   it('should process a single match batch', async () => {
     const match = createMatch();
-    const entryId = await redis.xadd(
-      context.stream,
-      '*',
-      'data',
-      JSON.stringify(match),
-    );
-
-    if (!entryId) {
-      throw new Error('Failed to add entry to stream');
-    }
-
     const matchWithMeta = createMatchWithMeta(match, {
-      id: entryId,
+      id: '1234-0',
       stream: context.stream,
     });
 
     await processSettlementBatch([matchWithMeta], context, testConfig);
 
-    expect(consoleLogSpy).toHaveBeenCalledWith(
-      '[process-settlement-batch] Processing batch of 1 matches',
-      [
-        {
-          id: entryId,
-          matchId: match.matchId,
-          lendOrderId: match.lendOrderId,
-          borrowOrderId: match.borrowOrderId,
-        },
-      ],
-    );
-
-    // Verify entry was deleted
-    const length = await redis.xlen(context.stream);
-    expect(length).toBe(0);
+    expect(mockSettleBatch).toHaveBeenCalledTimes(1);
+    expect(mockPersistSettlementResults).toHaveBeenCalledTimes(1);
+    expect(mockRedis.xack).toHaveBeenCalledWith(context.stream, context.consumerGroup, '1234-0');
+    expect(mockRedis.xdel).toHaveBeenCalledWith(context.stream, '1234-0');
+    expect(mockRedis.xtrim).toHaveBeenCalledWith(context.stream, 'MAXLEN', '~', context.streamMaxLen);
   });
 
   it('should process multiple matches from the same stream', async () => {
@@ -144,74 +95,45 @@ describe('processSettlementBatch', () => {
       createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440003' }),
     ];
 
-    const entryIds: string[] = [];
-    for (const match of matches) {
-      const entryId = await redis.xadd(
-        context.stream,
-        '*',
-        'data',
-        JSON.stringify(match),
-      );
-      if (entryId) {
-        entryIds.push(entryId);
-      }
-    }
-
-    const matchesWithMeta = matches.map((match, index) =>
+    const matchesWithMeta = matches.map((match, i) =>
       createMatchWithMeta(match, {
-        id: entryIds[index],
+        id: `entry-${i}`,
         stream: context.stream,
       }),
     );
 
     await processSettlementBatch(matchesWithMeta, context, testConfig);
 
-    expect(consoleLogSpy).toHaveBeenCalledWith(
-      '[process-settlement-batch] Processing batch of 3 matches',
-      expect.arrayContaining([
-        expect.objectContaining({ id: entryIds[0] }),
-        expect.objectContaining({ id: entryIds[1] }),
-        expect.objectContaining({ id: entryIds[2] }),
-      ]),
-    );
-
-    // All entries should be deleted
-    const length = await redis.xlen(context.stream);
-    expect(length).toBe(0);
+    expect(mockSettleBatch).toHaveBeenCalledTimes(1);
+    expect(mockRedis.xack).toHaveBeenCalledTimes(3);
+    expect(mockRedis.xdel).toHaveBeenCalledTimes(1); // batch delete
+    expect(mockRedis.xtrim).toHaveBeenCalledTimes(1);
   });
 
   it('should group matches by stream and delete separately', async () => {
-    const stream1 = `test:stream1:${Date.now()}`;
-    const stream2 = `test:stream2:${Date.now()}`;
+    const stream1 = 'test:stream1';
+    const stream2 = 'test:stream2';
 
     const match1 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
     const match2 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' });
     const match3 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440003' });
 
-    const entryId1 = await redis.xadd(stream1, '*', 'data', JSON.stringify(match1));
-    const entryId2 = await redis.xadd(stream1, '*', 'data', JSON.stringify(match2));
-    const entryId3 = await redis.xadd(stream2, '*', 'data', JSON.stringify(match3));
-
-    if (!entryId1 || !entryId2 || !entryId3) {
-      throw new Error('Failed to add entries to streams');
-    }
-
-    const matches = [
-      createMatchWithMeta(match1, { id: entryId1, stream: stream1 }),
-      createMatchWithMeta(match2, { id: entryId2, stream: stream1 }),
-      createMatchWithMeta(match3, { id: entryId3, stream: stream2 }),
+    const matchesWithMeta = [
+      createMatchWithMeta(match1, { id: 'e1', stream: stream1 }),
+      createMatchWithMeta(match2, { id: 'e2', stream: stream1 }),
+      createMatchWithMeta(match3, { id: 'e3', stream: stream2 }),
     ];
 
-    await processSettlementBatch(matches, context, testConfig);
+    await processSettlementBatch(matchesWithMeta, context, testConfig);
 
-    // Both streams should be empty
-    const length1 = await redis.xlen(stream1);
-    const length2 = await redis.xlen(stream2);
-    expect(length1).toBe(0);
-    expect(length2).toBe(0);
+    // xack called per entry
+    expect(mockRedis.xack).toHaveBeenCalledWith(stream1, context.consumerGroup, 'e1');
+    expect(mockRedis.xack).toHaveBeenCalledWith(stream1, context.consumerGroup, 'e2');
+    expect(mockRedis.xack).toHaveBeenCalledWith(stream2, context.consumerGroup, 'e3');
 
-    // Clean up test streams
-    await cleanupTestStreams(redis, [stream1, stream2]);
+    // xdel called per stream batch
+    expect(mockRedis.xdel).toHaveBeenCalledWith(stream1, 'e1', 'e2');
+    expect(mockRedis.xdel).toHaveBeenCalledWith(stream2, 'e3');
   });
 
   it('should use correct streamMaxLen from context', async () => {
@@ -220,61 +142,24 @@ describe('processSettlementBatch', () => {
       streamMaxLen: 5,
     };
 
-    // Add more entries than maxLen
-    const entries: string[] = [];
-    for (let i = 0; i < 10; i++) {
-      const match = createMatch({
-        matchId: `550e8400-e29b-41d4-a716-44665544000${i}`,
-      });
-      const entryId = await redis.xadd(
-        context.stream,
-        '*',
-        'data',
-        JSON.stringify(match),
-      );
-      if (entryId) {
-        entries.push(entryId);
-      }
-    }
-
-    const initialLength = await redis.xlen(context.stream);
-    expect(initialLength).toBe(10);
-
-    // Process one entry (which will trigger trim)
-    const match = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440010' });
+    const match = createMatch();
     const matchWithMeta = createMatchWithMeta(match, {
-      id: entries[0],
+      id: 'e1',
       stream: context.stream,
     });
 
     await processSettlementBatch([matchWithMeta], customContext, testConfig);
 
-    // Stream should be trimmed (exact behavior depends on Redis implementation)
-    const finalLength = await redis.xlen(context.stream);
-    expect(finalLength).toBeLessThan(initialLength);
+    expect(mockRedis.xtrim).toHaveBeenCalledWith(context.stream, 'MAXLEN', '~', 5);
   });
 
   it('should handle large batches correctly', async () => {
     const batchSize = 100;
     const matches = createMatchBatch(batchSize);
-    const entryIds: string[] = [];
 
-    // Add all matches to stream
-    for (const match of matches) {
-      const entryId = await redis.xadd(
-        context.stream,
-        '*',
-        'data',
-        JSON.stringify(match),
-      );
-      if (entryId) {
-        entryIds.push(entryId);
-      }
-    }
-
-    const matchesWithMeta = matches.map((match, index) =>
+    const matchesWithMeta = matches.map((match, i) =>
       createMatchWithMeta(match, {
-        id: entryIds[index],
+        id: `entry-${i}`,
         stream: context.stream,
       }),
     );
@@ -285,42 +170,62 @@ describe('processSettlementBatch', () => {
       '[process-settlement-batch] Processing batch of 100 matches',
       expect.any(Array),
     );
-
-    // All entries should be deleted
-    const length = await redis.xlen(context.stream);
-    expect(length).toBe(0);
+    expect(mockRedis.xack).toHaveBeenCalledTimes(100);
   });
 
-  it('should handle Redis operation failures gracefully', async () => {
+  it('should throw BatchProcessingError when smart contract fails with retryable error', async () => {
+    const error = createSettlementError('Contract is paused', 'CONTRACT_PAUSED', true, []);
+    setupMockSettleBatchError(mockSettleBatch, error);
+
     const match = createMatch();
-    const entryId = await redis.xadd(
-      context.stream,
-      '*',
-      'data',
-      JSON.stringify(match),
-    );
+    const matchWithMeta = createMatchWithMeta(match, { id: 'e1', stream: context.stream });
 
-    if (!entryId) {
-      throw new Error('Failed to add entry to stream');
-    }
+    await expect(
+      processSettlementBatch([matchWithMeta], context, testConfig),
+    ).rejects.toThrow(BatchProcessingError);
 
-    const matchWithMeta = createMatchWithMeta(match, {
-      id: entryId,
-      stream: context.stream,
-    });
+    // Should not ACK or delete on failure
+    expect(mockRedis.xack).not.toHaveBeenCalled();
+    expect(mockRedis.xdel).not.toHaveBeenCalled();
+  });
 
-    // Disconnect Redis to simulate connection failure
-    await redis.disconnect();
+  it('should throw BatchProcessingError when smart contract fails with non-retryable error', async () => {
+    const error = createSettlementError('Match already settled', 'ALREADY_SETTLED', false, []);
+    setupMockSettleBatchError(mockSettleBatch, error);
+
+    const match = createMatch();
+    const matchWithMeta = createMatchWithMeta(match, { id: 'e1', stream: context.stream });
 
     try {
-      await expect(processSettlementBatch([matchWithMeta], context, testConfig)).rejects.toThrow();
-    } finally {
-      // Reconnect for cleanup
-      const config = createTestConfig({
-        settlementMatchesStream: testStream,
-      });
-      redis = getRedisClient(config);
+      await processSettlementBatch([matchWithMeta], context, testConfig);
+      fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(BatchProcessingError);
+      expect((err as BatchProcessingError).retryable).toBe(false);
     }
+  });
+
+  it('should throw BatchProcessingError when database persistence fails', async () => {
+    mockPersistSettlementResults.mockRejectedValue({
+      message: 'Connection refused',
+      code: '08006',
+      retryable: true,
+    });
+
+    const match = createMatch();
+    const matchWithMeta = createMatchWithMeta(match, { id: 'e1', stream: context.stream });
+
+    try {
+      await processSettlementBatch([matchWithMeta], context, testConfig);
+      fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(BatchProcessingError);
+      expect((err as BatchProcessingError).retryable).toBe(true);
+      expect((err as BatchProcessingError).message).toContain('Database persistence failed');
+    }
+
+    // Should not ACK or delete on DB failure
+    expect(mockRedis.xack).not.toHaveBeenCalled();
   });
 
   it('should log match details correctly', async () => {
@@ -330,53 +235,107 @@ describe('processSettlementBatch', () => {
       borrowOrderId: '550e8400-e29b-41d4-a716-446655440102',
     });
 
-    const entryId = await redis.xadd(
-      context.stream,
-      '*',
-      'data',
-      JSON.stringify(match),
-    );
-
-    if (!entryId) {
-      throw new Error('Failed to add entry to stream');
-    }
-
     const matchWithMeta = createMatchWithMeta(match, {
-      id: entryId,
+      id: 'entry-1',
       stream: context.stream,
     });
 
-    // Retry in case of random smart contract/database failures
-    let retries = 3;
-    while (retries > 0) {
-      try {
-        await processSettlementBatch([matchWithMeta], context, testConfig);
-        break;
-      } catch (error) {
-        retries--;
-        if (retries === 0) {
-          throw error;
-        }
-        // Wait a bit before retry
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-    }
+    await processSettlementBatch([matchWithMeta], context, testConfig);
 
     expect(consoleLogSpy).toHaveBeenCalledWith(
       '[process-settlement-batch] Processing batch of 1 matches',
       [
         {
-          id: entryId,
+          id: 'entry-1',
           matchId: '550e8400-e29b-41d4-a716-446655440100',
           lendOrderId: '550e8400-e29b-41d4-a716-446655440101',
           borrowOrderId: '550e8400-e29b-41d4-a716-446655440102',
         },
       ],
     );
+  });
 
-    // Verify entry was deleted
-    const length = await redis.xlen(context.stream);
-    expect(length).toBe(0);
+  it('should pass match payloads to settleBatch', async () => {
+    const match1 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
+    const match2 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' });
+
+    const matchesWithMeta = [
+      createMatchWithMeta(match1, { id: 'e1', stream: context.stream }),
+      createMatchWithMeta(match2, { id: 'e2', stream: context.stream }),
+    ];
+
+    await processSettlementBatch(matchesWithMeta, context, testConfig);
+
+    expect(mockSettleBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        matches: [match1, match2],
+        config: testConfig,
+      }),
+    );
+  });
+
+  it('should pass settlement result to persistSettlementResults', async () => {
+    const match = createMatch();
+    const matchWithMeta = createMatchWithMeta(match, { id: 'e1', stream: context.stream });
+
+    await processSettlementBatch([matchWithMeta], context, testConfig);
+
+    expect(mockPersistSettlementResults).toHaveBeenCalledWith({
+      results: [
+        expect.objectContaining({
+          transactionHash: expect.any(String),
+          blockNumber: expect.any(Number),
+          gasUsed: expect.any(Number),
+          timestamp: expect.any(Number),
+          settledMatchIds: [match.matchId],
+        }),
+      ],
+    });
+  });
+
+  it('should log batch processing completion', async () => {
+    const match = createMatch();
+    const matchWithMeta = createMatchWithMeta(match, { id: 'e1', stream: context.stream });
+
+    await processSettlementBatch([matchWithMeta], context, testConfig);
+
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      '[process-settlement-batch] Batch processing complete',
+      expect.objectContaining({
+        matchCount: 1,
+        transactionHash: expect.any(String),
+      }),
+    );
+  });
+
+  it('should handle error without retryable property as retryable', async () => {
+    mockSettleBatch.mockRejectedValue({ message: 'Unknown error' });
+
+    const match = createMatch();
+    const matchWithMeta = createMatchWithMeta(match, { id: 'e1', stream: context.stream });
+
+    try {
+      await processSettlementBatch([matchWithMeta], context, testConfig);
+      fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(BatchProcessingError);
+      // When retryable is undefined, defaults to true
+      expect((err as BatchProcessingError).retryable).toBe(true);
+    }
+  });
+
+  it('should handle database error without retryable property as retryable', async () => {
+    mockPersistSettlementResults.mockRejectedValue({ message: 'DB error' });
+
+    const match = createMatch();
+    const matchWithMeta = createMatchWithMeta(match, { id: 'e1', stream: context.stream });
+
+    try {
+      await processSettlementBatch([matchWithMeta], context, testConfig);
+      fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(BatchProcessingError);
+      expect((err as BatchProcessingError).retryable).toBe(true);
+    }
   });
 });
-

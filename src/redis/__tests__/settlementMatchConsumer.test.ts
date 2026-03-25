@@ -1,190 +1,169 @@
-import type Redis from 'ioredis';
 import {
   ensureConsumerGroup,
   readMatches,
+  processPendingEntriesOnStartup,
 } from '../settlementMatchConsumer';
-import type { AppConfig } from '../../config';
 import { createMatch } from '../../tests/helpers/testFixtures';
-import {
-  createIsolatedTestEnvironment,
-  wait,
-  type IsolatedTestEnvironment,
-} from '../../tests/helpers/redisTestClient';
-import { createIsolatedTestConfig } from '../../tests/helpers/testConfig';
 
 /**
- * Unit tests for settlement match consumer using a real Redis instance.
- * These tests verify behavior with actual Redis stream operations.
- *
- * @requires Redis server running (default: localhost:6379, or set REDIS_TEST_URL)
+ * Unit tests for settlement match consumer.
+ * All Redis interactions are mocked — no live Redis required.
  */
+
 describe('ensureConsumerGroup', () => {
-  let testEnv: IsolatedTestEnvironment;
-  let redis: Redis;
-  let config: AppConfig;
-
-  beforeEach(async () => {
-    config = createIsolatedTestConfig();
-    testEnv = await createIsolatedTestEnvironment(config);
-    redis = testEnv.redis;
-  });
-
-  afterEach(async () => {
-    await testEnv.cleanup();
-  });
-
   it('should create a consumer group successfully', async () => {
-    // Consumer group already created in beforeEach, verify it exists
-    const groups = await redis.xinfo('GROUPS', config.settlementMatchesStream);
-    expect(Array.isArray(groups)).toBe(true);
-    if (Array.isArray(groups)) {
-      expect(groups.length).toBeGreaterThan(0);
-    }
+    const mockRedis = {
+      xgroup: jest.fn().mockResolvedValue('OK'),
+    } as any;
+
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+
+    await ensureConsumerGroup(mockRedis, 'test-stream', 'test-group');
+
+    expect(mockRedis.xgroup).toHaveBeenCalledWith(
+      'CREATE',
+      'test-stream',
+      'test-group',
+      '0',
+      'MKSTREAM',
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      'Created consumer group "test-group" on stream "test-stream"',
+    );
+
+    consoleSpy.mockRestore();
   });
 
   it('should handle BUSYGROUP error gracefully when group already exists', async () => {
-    // Consumer group already created in beforeEach
-    // Should not throw when creating again
+    const mockRedis = {
+      xgroup: jest.fn().mockRejectedValue(new Error('BUSYGROUP Consumer Group name already exists')),
+    } as any;
+
     await expect(
-      ensureConsumerGroup(
-        redis,
-        config.settlementMatchesStream,
-        config.consumerGroup,
-      ),
+      ensureConsumerGroup(mockRedis, 'test-stream', 'test-group'),
     ).resolves.not.toThrow();
   });
 
   it('should propagate other errors', async () => {
-    // Try to create group on non-existent stream without MKSTREAM
+    const mockRedis = {
+      xgroup: jest.fn().mockRejectedValue(new Error('ERR some other error')),
+    } as any;
+
     await expect(
-      redis.xgroup('CREATE', 'non-existent-stream', config.consumerGroup, '0'),
-    ).rejects.toThrow();
+      ensureConsumerGroup(mockRedis, 'test-stream', 'test-group'),
+    ).rejects.toThrow('ERR some other error');
+  });
+
+  it('should handle non-Error thrown values', async () => {
+    const mockRedis = {
+      xgroup: jest.fn().mockRejectedValue('string error'),
+    } as any;
+
+    await expect(
+      ensureConsumerGroup(mockRedis, 'test-stream', 'test-group'),
+    ).rejects.toBe('string error');
   });
 });
 
 describe('readMatches', () => {
-  let testEnv: IsolatedTestEnvironment;
-  let redis: Redis;
-  let config: AppConfig;
-  let onInvalid: jest.Mock<Promise<void>, [unknown]>;
+  let onInvalid: jest.Mock;
 
-  // Increase timeout for all tests in this suite
-  jest.setTimeout(30000);
-
-  beforeEach(async () => {
-    config = createIsolatedTestConfig();
-    testEnv = await createIsolatedTestEnvironment(config);
-    redis = testEnv.redis;
+  beforeEach(() => {
     onInvalid = jest.fn().mockResolvedValue(undefined);
-  }, 30000);
-
-  afterEach(async () => {
-    await testEnv.cleanup();
-  }, 30000);
+  });
 
   it('should read valid matches with JSON data field', async () => {
     const match = createMatch();
-    const entryId = await redis.xadd(
-      config.settlementMatchesStream,
-      '*',
-      'data',
-      JSON.stringify(match),
-    );
+    const mockRedis = {
+      xreadgroup: jest.fn().mockResolvedValue([
+        ['test-stream', [['entry-1', ['data', JSON.stringify(match)]]]],
+      ]),
+      xack: jest.fn().mockResolvedValue(1),
+    } as any;
 
     const matches = await readMatches({
-      redis,
-      stream: config.settlementMatchesStream,
-      consumerGroup: config.consumerGroup,
-      consumerName: config.consumerName,
-      readCount: config.readCount,
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
     });
 
     expect(matches).toHaveLength(1);
     expect(matches[0]).toEqual({
-      id: entryId,
-      stream: config.settlementMatchesStream,
+      id: 'entry-1',
+      stream: 'test-stream',
       payload: match,
     });
   });
 
   it('should read valid matches with individual fields', async () => {
     const match = createMatch();
-    const entryId = await redis.xadd(
-      config.settlementMatchesStream,
-      '*',
-      'matchId',
-      match.matchId,
-      'lendOrderId',
-      match.lendOrderId,
-      'borrowOrderId',
-      match.borrowOrderId,
-      'lenderWallet',
-      match.lenderWallet,
-      'borrowerWallet',
-      match.borrowerWallet,
-      'matchedAmount',
-      match.matchedAmount,
-      'rate',
-      String(match.rate),
-      'loanToken',
-      match.loanToken,
-      'maturity',
-      String(match.maturity),
-      'timestamp',
-      String(match.timestamp),
-      'borrowerIsTaker',
-      String(match.borrowerIsTaker),
-      'makerFeeAmount',
-      String(match.makerFeeAmount),
-      'takerFeeAmount',
-      String(match.takerFeeAmount),
-      'lenderSettlementFee',
-      String(match.lenderSettlementFee),
-      'borrowerSettlementFee',
-      String(match.borrowerSettlementFee),
-    );
+    const fields = [
+      'matchId', match.matchId,
+      'lendOrderId', match.lendOrderId,
+      'borrowOrderId', match.borrowOrderId,
+      'lenderWallet', match.lenderWallet,
+      'borrowerWallet', match.borrowerWallet,
+      'matchedAmount', match.matchedAmount,
+      'rate', String(match.rate),
+      'loanToken', match.loanToken,
+      'maturity', String(match.maturity),
+      'timestamp', String(match.timestamp),
+      'borrowerIsTaker', String(match.borrowerIsTaker),
+      'makerFeeAmount', match.makerFeeAmount,
+      'takerFeeAmount', match.takerFeeAmount,
+      'lenderSettlementFee', match.lenderSettlementFee,
+      'borrowerSettlementFee', match.borrowerSettlementFee,
+    ];
+
+    const mockRedis = {
+      xreadgroup: jest.fn().mockResolvedValue([
+        ['test-stream', [['entry-1', fields]]],
+      ]),
+      xack: jest.fn().mockResolvedValue(1),
+    } as any;
 
     const matches = await readMatches({
-      redis,
-      stream: config.settlementMatchesStream,
-      consumerGroup: config.consumerGroup,
-      consumerName: config.consumerName,
-      readCount: config.readCount,
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
     });
 
     expect(matches).toHaveLength(1);
-    expect(matches[0]).toEqual({
-      id: entryId,
-      stream: config.settlementMatchesStream,
-      payload: match,
-    });
+    expect(matches[0]?.payload).toEqual(match);
   });
 
   it('should handle invalid JSON in data field', async () => {
-    const entryId = await redis.xadd(
-      config.settlementMatchesStream,
-      '*',
-      'data',
-      'invalid json {',
-    );
+    const mockRedis = {
+      xreadgroup: jest.fn().mockResolvedValue([
+        ['test-stream', [['entry-1', ['data', 'invalid json {']]]],
+      ]),
+      xack: jest.fn().mockResolvedValue(1),
+    } as any;
 
     const matches = await readMatches({
-      redis,
-      stream: config.settlementMatchesStream,
-      consumerGroup: config.consumerGroup,
-      consumerName: config.consumerName,
-      readCount: config.readCount,
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
       onInvalid,
     });
 
     expect(matches).toHaveLength(0);
     expect(onInvalid).toHaveBeenCalledTimes(1);
-    expect(onInvalid).toHaveBeenCalledWith({
-      id: entryId,
-      stream: config.settlementMatchesStream,
-      raw: expect.any(Object),
-      error: expect.any(Error),
-    });
+    expect(onInvalid).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'entry-1',
+        stream: 'test-stream',
+        error: expect.any(Error),
+      }),
+    );
+    // Invalid entries should be ACKed immediately
+    expect(mockRedis.xack).toHaveBeenCalledWith('test-stream', 'test-group', 'entry-1');
   });
 
   it('should handle invalid schema matches', async () => {
@@ -192,47 +171,44 @@ describe('readMatches', () => {
       matchId: 'invalid', // Not a UUID
       lendOrderId: '550e8400-e29b-41d4-a716-446655440001',
     };
-    const entryId = await redis.xadd(
-      config.settlementMatchesStream,
-      '*',
-      'data',
-      JSON.stringify(invalidMatch),
-    );
+
+    const mockRedis = {
+      xreadgroup: jest.fn().mockResolvedValue([
+        ['test-stream', [['entry-1', ['data', JSON.stringify(invalidMatch)]]]],
+      ]),
+      xack: jest.fn().mockResolvedValue(1),
+    } as any;
 
     const matches = await readMatches({
-      redis,
-      stream: config.settlementMatchesStream,
-      consumerGroup: config.consumerGroup,
-      consumerName: config.consumerName,
-      readCount: config.readCount,
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
       onInvalid,
     });
 
     expect(matches).toHaveLength(0);
     expect(onInvalid).toHaveBeenCalledTimes(1);
-    expect(onInvalid).toHaveBeenCalledWith({
-      id: entryId,
-      stream: config.settlementMatchesStream,
-      raw: expect.any(Object),
-      error: expect.any(Error),
-    });
+    expect(mockRedis.xack).toHaveBeenCalledWith('test-stream', 'test-group', 'entry-1');
   });
 
   it('should log to console.error when onInvalid handler is not provided', async () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-    await redis.xadd(
-      config.settlementMatchesStream,
-      '*',
-      'data',
-      JSON.stringify({ invalid: 'data' }),
-    );
+
+    const mockRedis = {
+      xreadgroup: jest.fn().mockResolvedValue([
+        ['test-stream', [['entry-1', ['data', JSON.stringify({ invalid: 'data' })]]]],
+      ]),
+      xack: jest.fn().mockResolvedValue(1),
+    } as any;
 
     const matches = await readMatches({
-      redis,
-      stream: config.settlementMatchesStream,
-      consumerGroup: config.consumerGroup,
-      consumerName: config.consumerName,
-      readCount: config.readCount,
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
     });
 
     expect(matches).toHaveLength(0);
@@ -244,84 +220,81 @@ describe('readMatches', () => {
     consoleSpy.mockRestore();
   });
 
-  it('should return empty array when stream is empty', async () => {
+  it('should return empty array when stream is empty (null result)', async () => {
+    const mockRedis = {
+      xreadgroup: jest.fn().mockResolvedValue(null),
+    } as any;
+
     const matches = await readMatches({
-      redis,
-      stream: config.settlementMatchesStream,
-      consumerGroup: config.consumerGroup,
-      consumerName: config.consumerName,
-      readCount: config.readCount,
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
     });
 
     expect(matches).toHaveLength(0);
-  }, 15000);
+  });
+
+  it('should return empty array when stream result is empty array', async () => {
+    const mockRedis = {
+      xreadgroup: jest.fn().mockResolvedValue([]),
+    } as any;
+
+    const matches = await readMatches({
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
+    });
+
+    expect(matches).toHaveLength(0);
+  });
 
   it('should read multiple matches', async () => {
     const match1 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
     const match2 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' });
 
-    const entryId1 = await redis.xadd(
-      config.settlementMatchesStream,
-      '*',
-      'data',
-      JSON.stringify(match1),
-    );
-    const entryId2 = await redis.xadd(
-      config.settlementMatchesStream,
-      '*',
-      'data',
-      JSON.stringify(match2),
-    );
+    const mockRedis = {
+      xreadgroup: jest.fn().mockResolvedValue([
+        [
+          'test-stream',
+          [
+            ['entry-1', ['data', JSON.stringify(match1)]],
+            ['entry-2', ['data', JSON.stringify(match2)]],
+          ],
+        ],
+      ]),
+      xack: jest.fn().mockResolvedValue(1),
+    } as any;
 
     const matches = await readMatches({
-      redis,
-      stream: config.settlementMatchesStream,
-      consumerGroup: config.consumerGroup,
-      consumerName: config.consumerName,
-      readCount: config.readCount,
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
     });
 
     expect(matches).toHaveLength(2);
-    expect(matches[0]?.id).toBe(entryId1);
-    expect(matches[1]?.id).toBe(entryId2);
-  }, 15000);
+    expect(matches[0]?.id).toBe('entry-1');
+    expect(matches[1]?.id).toBe('entry-2');
+  });
 
-  it('should respect readCount limit', async () => {
-    // Add more matches than readCount
-    const matches = Array.from({ length: 15 }, () => createMatch());
-    for (const match of matches) {
-      await redis.xadd(
-        config.settlementMatchesStream,
-        '*',
-        'data',
-        JSON.stringify(match),
-      );
-    }
-
-    const readMatchesResult = await readMatches({
-      redis,
-      stream: config.settlementMatchesStream,
-      consumerGroup: config.consumerGroup,
-      consumerName: config.consumerName,
-      readCount: 5,
-    });
-
-    // Should read up to readCount
-    expect(readMatchesResult.length).toBeLessThanOrEqual(5);
-  }, 15000);
-
-  it('should handle errors gracefully', async () => {
+  it('should handle errors gracefully and return empty array', async () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
 
-    // Disconnect Redis to cause errors
-    await redis.disconnect();
+    const mockRedis = {
+      xreadgroup: jest.fn().mockRejectedValue(new Error('Connection lost')),
+    } as any;
 
     const matches = await readMatches({
-      redis,
-      stream: config.settlementMatchesStream,
-      consumerGroup: config.consumerGroup,
-      consumerName: config.consumerName,
-      readCount: config.readCount,
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
     });
 
     expect(matches).toHaveLength(0);
@@ -331,8 +304,194 @@ describe('readMatches', () => {
     );
 
     consoleSpy.mockRestore();
+  });
 
-    // Wait a bit to ensure cleanup doesn't interfere
-    await wait(100);
-  }, 15000);
+  it('should pass correct arguments to xreadgroup', async () => {
+    const mockRedis = {
+      xreadgroup: jest.fn().mockResolvedValue(null),
+    } as any;
+
+    await readMatches({
+      redis: mockRedis,
+      stream: 'my-stream',
+      consumerGroup: 'my-group',
+      consumerName: 'my-consumer',
+      readCount: 42,
+    });
+
+    expect(mockRedis.xreadgroup).toHaveBeenCalledWith(
+      'GROUP',
+      'my-group',
+      'my-consumer',
+      'COUNT',
+      42,
+      'STREAMS',
+      'my-stream',
+      '>',
+    );
+  });
+
+  it('should mix valid and invalid entries, keeping valid ones', async () => {
+    const validMatch = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
+
+    const mockRedis = {
+      xreadgroup: jest.fn().mockResolvedValue([
+        [
+          'test-stream',
+          [
+            ['entry-1', ['data', JSON.stringify(validMatch)]],
+            ['entry-2', ['data', JSON.stringify({ invalid: true })]],
+            ['entry-3', ['data', 'not json']],
+          ],
+        ],
+      ]),
+      xack: jest.fn().mockResolvedValue(1),
+    } as any;
+
+    const matches = await readMatches({
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
+      onInvalid,
+    });
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.payload.matchId).toBe('550e8400-e29b-41d4-a716-446655440001');
+    // Invalid entries ACKed
+    expect(mockRedis.xack).toHaveBeenCalledWith('test-stream', 'test-group', 'entry-2');
+    expect(mockRedis.xack).toHaveBeenCalledWith('test-stream', 'test-group', 'entry-3');
+    // Valid entry NOT ACKed (ACK happens after batch processing)
+    expect(mockRedis.xack).not.toHaveBeenCalledWith('test-stream', 'test-group', 'entry-1');
+  });
+});
+
+describe('processPendingEntriesOnStartup', () => {
+  it('should process pending entries from current consumer', async () => {
+    const match = createMatch();
+
+    const mockRedis = {
+      xreadgroup: jest.fn()
+        // First call: pending entries for current consumer (using '0')
+        .mockResolvedValueOnce([
+          ['test-stream', [['entry-1', ['data', JSON.stringify(match)]]]],
+        ])
+        // Second call: no more pending entries
+        .mockResolvedValueOnce([['test-stream', []]])
+        // Third call is for XPENDING (not xreadgroup)
+        ,
+      xack: jest.fn().mockResolvedValue(1),
+      xpending: jest.fn().mockResolvedValue([0, null, null, null]),
+    } as any;
+
+    const matches = await processPendingEntriesOnStartup({
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
+    });
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.payload).toEqual(match);
+  });
+
+  it('should return empty array when no pending entries', async () => {
+    const mockRedis = {
+      xreadgroup: jest.fn().mockResolvedValue(null),
+      xpending: jest.fn().mockResolvedValue([0, null, null, null]),
+    } as any;
+
+    const matches = await processPendingEntriesOnStartup({
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
+    });
+
+    expect(matches).toHaveLength(0);
+  });
+
+  it('should handle errors during pending entry processing', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+
+    const mockRedis = {
+      xreadgroup: jest.fn().mockRejectedValue(new Error('Redis error')),
+      xpending: jest.fn().mockResolvedValue([0, null, null, null]),
+    } as any;
+
+    const matches = await processPendingEntriesOnStartup({
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
+    });
+
+    expect(matches).toHaveLength(0);
+    consoleSpy.mockRestore();
+  });
+
+  it('should claim stale entries from other consumers', async () => {
+    const match = createMatch();
+
+    const mockRedis = {
+      // First: no pending for current consumer
+      xreadgroup: jest.fn().mockResolvedValue(null),
+      // XPENDING summary: 1 pending entry
+      xpending: jest.fn()
+        .mockResolvedValueOnce([1, 'entry-1', 'entry-1', [['other-consumer', '1']]])
+        // Detailed pending: one entry from other-consumer
+        .mockResolvedValueOnce([['entry-1', 'other-consumer', 5000, 1]])
+        // After claim, no more pending
+        .mockResolvedValueOnce([0, null, null, null]),
+      xclaim: jest.fn().mockResolvedValue([
+        ['entry-1', ['data', JSON.stringify(match)]],
+      ]),
+      xack: jest.fn().mockResolvedValue(1),
+    } as any;
+
+    const matches = await processPendingEntriesOnStartup({
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
+    });
+
+    expect(matches).toHaveLength(1);
+    expect(mockRedis.xclaim).toHaveBeenCalledWith(
+      'test-stream',
+      'test-group',
+      'test-consumer',
+      0,
+      'entry-1',
+    );
+  });
+
+  it('should ACK and skip invalid entries during pending processing', async () => {
+    const mockRedis = {
+      xreadgroup: jest.fn().mockResolvedValueOnce([
+        ['test-stream', [['entry-1', ['data', 'not valid json']]]],
+      ]).mockResolvedValueOnce([['test-stream', []]]),
+      xack: jest.fn().mockResolvedValue(1),
+      xpending: jest.fn().mockResolvedValue([0, null, null, null]),
+    } as any;
+
+    const onInvalid = jest.fn().mockResolvedValue(undefined);
+
+    const matches = await processPendingEntriesOnStartup({
+      redis: mockRedis,
+      stream: 'test-stream',
+      consumerGroup: 'test-group',
+      consumerName: 'test-consumer',
+      readCount: 10,
+      onInvalid,
+    });
+
+    expect(matches).toHaveLength(0);
+    expect(mockRedis.xack).toHaveBeenCalledWith('test-stream', 'test-group', 'entry-1');
+  });
 });
