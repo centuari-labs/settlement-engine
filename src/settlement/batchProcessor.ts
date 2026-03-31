@@ -14,6 +14,9 @@ import {
 import {
   findUnprocessedSettlementBatches,
   retryEventProcessing,
+  unlockFailedMatches,
+  recordFailedMatches,
+  restoreOrdersForFailedMatches,
 } from './database';
 
 /**
@@ -301,11 +304,60 @@ export class BatchProcessor {
         } else {
           // eslint-disable-next-line no-console
           console.error(
-            `[batch-processor] Non-retryable error, matches remain in Redis pending state for manual intervention`,
+            `[batch-processor] Non-retryable error, running full failure cleanup`,
             {
               matchIds: batch.map((m) => m.id),
+              errorCode: (error.originalError as any)?.code,
             },
           );
+
+          const payloads = batch.map((m) => m.payload);
+          const failureReason = (error.originalError as any)?.code ?? error.message;
+
+          // 1. Unlock portfolio locked_amount
+          try {
+            await unlockFailedMatches(payloads);
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.error(`[batch-processor] Failed to unlock portfolio amounts`, e);
+          }
+
+          // 2. Mark matches as FAILED in database
+          try {
+            await recordFailedMatches(payloads, failureReason);
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.error(`[batch-processor] Failed to record match failures`, e);
+          }
+
+          // 3. Restore order quantities (reduce filled_quantity, cancel/partially_fill)
+          try {
+            await restoreOrdersForFailedMatches(payloads);
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.error(`[batch-processor] Failed to restore order quantities`, e);
+          }
+
+          // 4. ACK + delete Redis entries to prevent infinite retry loop
+          try {
+            for (const match of batch) {
+              await this.batchContext.redis.xack(
+                match.stream, this.batchContext.consumerGroup, match.id,
+              );
+              await this.batchContext.redis.xdel(match.stream, match.id);
+            }
+            // eslint-disable-next-line no-console
+            console.log(
+              `[batch-processor] ACKed and deleted ${batch.length} failed entries from Redis`,
+            );
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.error(`[batch-processor] Failed to ACK/delete Redis entries`, e);
+          }
+
+          // Entries are cleaned up — no backoff needed, don't re-throw
+          this.consecutiveFailures = 0;
+          return;
         }
       } else {
         // Unexpected error - matches remain in Redis pending state for retry
