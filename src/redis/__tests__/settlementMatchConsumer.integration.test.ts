@@ -267,6 +267,8 @@ describe('settlementMatchConsumer Integration Tests', () => {
       match.lendOrderId,
       'borrowOrderId',
       match.borrowOrderId,
+      'marketId',
+      match.marketId,
       'lenderWallet',
       match.lenderWallet,
       'borrowerWallet',
