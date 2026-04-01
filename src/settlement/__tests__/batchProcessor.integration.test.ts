@@ -292,21 +292,17 @@ describe('BatchProcessor Integration Tests', () => {
   }, 10000);
 
   it('should respect pollIntervalMs configuration', async () => {
-    const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+    // Spy on xreadgroup: each poll calls readMatches() which calls redis.xreadgroup.
+    // This verifies the poll interval is actually firing at the configured rate.
+    const xreadgroupSpy = jest.spyOn(redis, 'xreadgroup');
 
     processor.start();
 
-    // Wait for multiple poll intervals
+    // Wait for multiple poll intervals (pollIntervalMs = 100ms, so ~3-4 polls in 350ms)
     await new Promise((resolve) => setTimeout(resolve, 350));
 
-    // Verify polling is happening (check for log messages)
-    // The exact count depends on timing, but should be at least 2-3 polls
-    const logCalls = consoleSpy.mock.calls.filter((call) =>
-      call[0]?.toString().includes('[batch-processor]'),
-    );
-    expect(logCalls.length).toBeGreaterThan(0);
-
-    consoleSpy.mockRestore();
+    // Expect at least 2 xreadgroup calls, confirming polling is active
+    expect(xreadgroupSpy.mock.calls.length).toBeGreaterThan(1);
   }, 10000);
 
   it('should handle empty stream gracefully', async () => {
