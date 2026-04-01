@@ -812,3 +812,23 @@ export const settleBatch = async (
   }
 };
 
+const erc20MetadataAbi = [
+  { type: 'function', name: 'name', inputs: [], outputs: [{ type: 'string' }], stateMutability: 'view' },
+  { type: 'function', name: 'symbol', inputs: [], outputs: [{ type: 'string' }], stateMutability: 'view' },
+] as const;
+
+/**
+ * Fetch ERC20 token name and symbol from on-chain contract.
+ */
+export async function fetchErc20Metadata(
+  config: AppConfig,
+  tokenAddress: string,
+): Promise<{ name: string; symbol: string }> {
+  const client = getPublicClient(config);
+  const [name, symbol] = await Promise.all([
+    client.readContract({ address: tokenAddress as Address, abi: erc20MetadataAbi, functionName: 'name' }),
+    client.readContract({ address: tokenAddress as Address, abi: erc20MetadataAbi, functionName: 'symbol' }),
+  ]);
+  return { name, symbol };
+}
+
