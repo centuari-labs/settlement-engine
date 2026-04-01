@@ -44,6 +44,9 @@ export const createTestConfig = (overrides?: Partial<AppConfig>): AppConfig => {
       process.env.SETTLEMENT_PRIVATE_KEY ||
       '0x0000000000000000000000000000000000000000000000000000000000000001',
     ethereumChainId: Number(process.env.ETHEREUM_CHAIN_ID || '1'),
+    nonceLockTtlMs: 30000,
+    txConfirmationTimeoutMs: 120000,
+    nonceLockRetryDelayMs: 500,
   };
 
   return {

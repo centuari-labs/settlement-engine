@@ -9,6 +9,7 @@ import {
 } from './redis/settlementMatchConsumer';
 import { BatchAccumulator } from './settlement/batchAccumulator';
 import { BatchProcessor } from './settlement/batchProcessor';
+import { createNonceManager } from './settlement/nonceManager';
 
 const main = async (): Promise<void> => {
   const config = loadConfig();
@@ -58,11 +59,15 @@ const main = async (): Promise<void> => {
     // Continue anyway - pending entries will be reclaimed later
   }
 
+  // Create nonce manager for explicit nonce sequencing
+  const nonceManager = createNonceManager(redis, config);
+
   // Create and start batch processor
   const batchProcessor = new BatchProcessor({
     redis,
     config,
     accumulator,
+    nonceManager,
   });
 
   batchProcessor.start();
@@ -87,6 +92,9 @@ const main = async (): Promise<void> => {
 
     // Stop batch processor (will process pending batches)
     await batchProcessor.stop();
+
+    // Release nonce manager lock
+    await nonceManager.destroy();
 
     // Close Redis connection
     await closeRedisClient();
