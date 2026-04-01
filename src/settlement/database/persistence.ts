@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { logger } from '../../logger';
 import type { Address } from 'viem';
 import type {
   ParsedBondToken,
@@ -119,9 +120,9 @@ const persistLendPositionCreated = async (
     cbtAssetId = cbtAssetRows.rows[0].id;
   } else {
     // CBT asset not found — fetch ERC20 metadata on-chain and create it
-    // eslint-disable-next-line no-console
-    console.log(
-      `[database] CBT asset not found for bondToken ${bondTokenLower} in market ${marketIdUuid}, fetching ERC20 metadata on-chain`,
+    logger.info(
+      { component: 'database', bondToken: bondTokenLower, marketId: marketIdUuid },
+      'CBT asset not found, fetching ERC20 metadata on-chain',
     );
     const metadata = await fetchErc20Metadata(config, bondTokenLower);
     cbtAssetId = cbtAssetUuidFor(ev.marketId, bondTokenLower);
@@ -235,8 +236,7 @@ const upsertMatch = async (
   );
   const asset = assetRows.rows[0];
   if (!asset) {
-    // eslint-disable-next-line no-console
-    console.warn(`[database] Asset not found for token ${loanTokenLower}, skipping match upsert for ${matchId}`);
+    logger.warn({ component: 'database', loanToken: loanTokenLower, matchId }, 'Asset not found, skipping match upsert');
     return;
   }
 
@@ -247,8 +247,7 @@ const upsertMatch = async (
   );
   const lenderAccount = lenderRows.rows[0];
   if (!lenderAccount) {
-    // eslint-disable-next-line no-console
-    console.warn(`[database] Lender account not found for wallet ${lenderWalletLower}, skipping match upsert for ${matchId}`);
+    logger.warn({ component: 'database', wallet: lenderWalletLower, matchId }, 'Lender account not found, skipping match upsert');
     return;
   }
 
@@ -259,8 +258,7 @@ const upsertMatch = async (
   );
   const borrowerAccount = borrowerRows.rows[0];
   if (!borrowerAccount) {
-    // eslint-disable-next-line no-console
-    console.warn(`[database] Borrower account not found for wallet ${borrowerWalletLower}, skipping match upsert for ${matchId}`);
+    logger.warn({ component: 'database', wallet: borrowerWalletLower, matchId }, 'Borrower account not found, skipping match upsert');
     return;
   }
 
@@ -471,11 +469,14 @@ export const persistSettlementResults = async (
     return;
   }
 
-  // eslint-disable-next-line no-console
-  console.log('[database] Persisting settlement results', {
-    batchCount: results.length,
-    transactionHashes: results.map((result) => result.transactionHash),
-  });
+  logger.info(
+    {
+      component: 'database',
+      batchCount: results.length,
+      transactionHashes: results.map((result) => result.transactionHash),
+    },
+    'Persisting settlement results',
+  );
 
   // Phase 1: Persist settlement records + raw events (must succeed)
   const batchIds: { batchId: string; events: RawSettlementEvents }[] = [];
@@ -533,11 +534,14 @@ export const persistSettlementResults = async (
     retryDelayMs,
   );
 
-  // eslint-disable-next-line no-console
-  console.log('[database] Phase 1 complete: settlement records persisted', {
-    batchCount: results.length,
-    batchIds: batchIds.map((b) => b.batchId),
-  });
+  logger.info(
+    {
+      component: 'database',
+      batchCount: results.length,
+      batchIds: batchIds.map((b) => b.batchId),
+    },
+    'Phase 1 complete: settlement records persisted',
+  );
 
   // Phase 2: Process events into positions (can fail — data is safe in raw_events)
   for (const { batchId, events } of batchIds) {
@@ -546,24 +550,27 @@ export const persistSettlementResults = async (
         await processSettlementEvents(client, batchId, events, config);
       });
 
-      // eslint-disable-next-line no-console
-      console.log('[database] Phase 2 complete: events processed for batch', {
-        batchId,
-        bondTokenEvents: events.bondTokenEvents.length,
-        lendPositionEvents: events.lendPositionEvents.length,
-        borrowPositionEvents: events.borrowPositionEvents.length,
-      });
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error(
-        `[database] Phase 2 failed for batch ${batchId}: event processing failed. Raw events are stored for recovery.`,
+      logger.info(
         {
+          component: 'database',
           batchId,
-          error: error instanceof Error ? error.message : String(error),
           bondTokenEvents: events.bondTokenEvents.length,
           lendPositionEvents: events.lendPositionEvents.length,
           borrowPositionEvents: events.borrowPositionEvents.length,
         },
+        'Phase 2 complete: events processed for batch',
+      );
+    } catch (error) {
+      logger.error(
+        {
+          component: 'database',
+          batchId,
+          err: error instanceof Error ? error.message : String(error),
+          bondTokenEvents: events.bondTokenEvents.length,
+          lendPositionEvents: events.lendPositionEvents.length,
+          borrowPositionEvents: events.borrowPositionEvents.length,
+        },
+        'Phase 2 failed: event processing failed. Raw events are stored for recovery.',
       );
       // Do NOT rethrow — Phase 1 data is committed, recovery loop will retry.
     }

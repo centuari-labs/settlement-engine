@@ -11,6 +11,7 @@ import { createTestConfig } from '../../tests/helpers/testConfig';
 import { persistSettlementResults } from '../database';
 import { filterAlreadySettledMatches, settleBatch } from '../smartContract';
 import { setupMockSettleBatch, getMockSettleBatch, setupMockSettleBatchError, createSettlementError } from '../../tests/helpers/mockSmartContract';
+import { logger } from '../../logger';
 
 // Mock database to avoid random failures
 jest.mock('../database');
@@ -72,7 +73,7 @@ describe('processSettlementBatch', () => {
       consumerGroup: testConfig.consumerGroup,
       streamMaxLen: 10000,
     };
-    consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
+    consoleLogSpy = jest.spyOn(logger, 'info').mockImplementation(() => {});
 
     // Set up default successful mocks using the mock helper
     setupMockSettleBatch(mockSettleBatch);
@@ -100,7 +101,7 @@ describe('processSettlementBatch', () => {
 
     // Empty batch returns early without logging
     expect(consoleLogSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining('[process-settlement-batch]'),
+      expect.objectContaining({ component: 'process-settlement-batch' }),
       expect.anything(),
     );
 
@@ -130,15 +131,17 @@ describe('processSettlementBatch', () => {
     await processSettlementBatch([matchWithMeta], context, testConfig);
 
     expect(consoleLogSpy).toHaveBeenCalledWith(
-      '[process-settlement-batch] Processing batch of 1 matches',
-      [
-        {
+      expect.objectContaining({
+        component: 'process-settlement-batch',
+        matchCount: 1,
+        matches: [expect.objectContaining({
           id: entryId,
           matchId: match.matchId,
           lendOrderId: match.lendOrderId,
           borrowOrderId: match.borrowOrderId,
-        },
-      ],
+        })],
+      }),
+      'Processing batch',
     );
 
     // Verify entry was deleted
@@ -176,12 +179,16 @@ describe('processSettlementBatch', () => {
     await processSettlementBatch(matchesWithMeta, context, testConfig);
 
     expect(consoleLogSpy).toHaveBeenCalledWith(
-      '[process-settlement-batch] Processing batch of 3 matches',
-      expect.arrayContaining([
-        expect.objectContaining({ id: entryIds[0] }),
-        expect.objectContaining({ id: entryIds[1] }),
-        expect.objectContaining({ id: entryIds[2] }),
-      ]),
+      expect.objectContaining({
+        component: 'process-settlement-batch',
+        matchCount: 3,
+        matches: expect.arrayContaining([
+          expect.objectContaining({ id: entryIds[0] }),
+          expect.objectContaining({ id: entryIds[1] }),
+          expect.objectContaining({ id: entryIds[2] }),
+        ]),
+      }),
+      'Processing batch',
     );
 
     // All entries should be deleted
@@ -291,8 +298,12 @@ describe('processSettlementBatch', () => {
     await processSettlementBatch(matchesWithMeta, context, testConfig);
 
     expect(consoleLogSpy).toHaveBeenCalledWith(
-      '[process-settlement-batch] Processing batch of 100 matches',
-      expect.any(Array),
+      expect.objectContaining({
+        component: 'process-settlement-batch',
+        matchCount: 100,
+        matches: expect.any(Array),
+      }),
+      'Processing batch',
     );
 
     // All entries should be deleted
@@ -628,15 +639,17 @@ describe('processSettlementBatch', () => {
     }
 
     expect(consoleLogSpy).toHaveBeenCalledWith(
-      '[process-settlement-batch] Processing batch of 1 matches',
-      [
-        {
+      expect.objectContaining({
+        component: 'process-settlement-batch',
+        matchCount: 1,
+        matches: [expect.objectContaining({
           id: entryId,
           matchId: '550e8400-e29b-41d4-a716-446655440100',
           lendOrderId: '550e8400-e29b-41d4-a716-446655440101',
           borrowOrderId: '550e8400-e29b-41d4-a716-446655440102',
-        },
-      ],
+        })],
+      }),
+      'Processing batch',
     );
 
     // Verify entry was deleted

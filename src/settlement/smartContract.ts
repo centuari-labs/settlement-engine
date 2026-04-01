@@ -22,6 +22,7 @@ import {
 } from './eventAbis';
 import { SETTLEMENT_CONTRACT_ABI, erc20MetadataAbi } from './abi';
 import type { NonceManager } from './nonceManager';
+import { logger } from '../logger';
 
 /**
  * Parsed BondTokenCreated event from settlement tx receipt.
@@ -586,10 +587,13 @@ export const filterAlreadySettledMatches = async (
   }
 
   if (alreadySettled.length > 0) {
-    // eslint-disable-next-line no-console
-    console.log(
-      `[smart-contract] Filtered out ${alreadySettled.length} already-settled matches`,
-      { matchIds: alreadySettled.map((m) => m.payload.matchId) },
+    logger.info(
+      {
+        component: 'smart-contract',
+        count: alreadySettled.length,
+        matchIds: alreadySettled.map((m) => m.payload.matchId),
+      },
+      'Filtered out already-settled matches',
     );
   }
 
@@ -631,10 +635,10 @@ export const settleBatch = async (
   // Transform matches to contract format
   const contractMatches = matches.map(transformMatchToContractFormat);
 
-  // eslint-disable-next-line no-console
-  console.log(
-    `[smart-contract] Settling batch of ${matches.length} matches`,
+  logger.info(
     {
+      component: 'smart-contract',
+      matchCount: matches.length,
       matchIds: matches.map((m) => m.matchId),
       maxRetries,
       retryDelayMs,
@@ -642,6 +646,7 @@ export const settleBatch = async (
       ethereumChainId: config.ethereumChainId,
       ethereumRpcUrl: config.ethereumRpcUrl,
     },
+    'Settling batch',
   );
 
   try {
@@ -696,10 +701,9 @@ export const settleBatch = async (
     const { bondTokenEvents, lendPositionEvents, borrowPositionEvents } =
       parseReceiptLogs(receipt.logs);
 
-    // eslint-disable-next-line no-console
-    console.log(
-      '[smart-contract] Settlement transaction mined',
+    logger.info(
       {
+        component: 'smart-contract',
         transactionHash: receipt.transactionHash,
         blockNumber,
         gasUsed,
@@ -709,6 +713,7 @@ export const settleBatch = async (
         lendPositionEvents: lendPositionEvents.length,
         borrowPositionEvents: borrowPositionEvents.length,
       },
+      'Settlement transaction mined',
     );
 
     return {
@@ -732,13 +737,16 @@ export const settleBatch = async (
       matches.map((m) => m.matchId),
     );
 
-    // eslint-disable-next-line no-console
-    console.error('[smart-contract] Settlement failed', {
-      message: settlementError.message,
-      code: settlementError.code,
-      retryable: settlementError.retryable,
-      failedMatchIds: settlementError.failedMatchIds,
-    });
+    logger.error(
+      {
+        component: 'smart-contract',
+        message: settlementError.message,
+        code: settlementError.code,
+        retryable: settlementError.retryable,
+        failedMatchIds: settlementError.failedMatchIds,
+      },
+      'Settlement failed',
+    );
 
     throw settlementError;
   }

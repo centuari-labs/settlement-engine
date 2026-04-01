@@ -10,6 +10,7 @@ import {
 import { BatchAccumulator } from './settlement/batchAccumulator';
 import { BatchProcessor } from './settlement/batchProcessor';
 import { createNonceManager } from './settlement/nonceManager';
+import { logger } from './logger';
 
 const main = async (): Promise<void> => {
   const config = loadConfig();
@@ -45,16 +46,15 @@ const main = async (): Promise<void> => {
     );
     if (pendingMatches.length > 0) {
       accumulator.addMatches(pendingMatches);
-      // eslint-disable-next-line no-console
-      console.log(
-        `[settlement-engine] Processed ${pendingMatches.length} pending matches on startup`,
+      logger.info(
+        { component: 'settlement-engine', count: pendingMatches.length },
+        'Processed pending matches on startup',
       );
     }
   } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error(
-      '[settlement-engine] Error processing pending entries on startup',
-      error,
+    logger.error(
+      { component: 'settlement-engine', err: error },
+      'Error processing pending entries on startup',
     );
     // Continue anyway - pending entries will be reclaimed later
   }
@@ -72,23 +72,20 @@ const main = async (): Promise<void> => {
 
   batchProcessor.start();
 
-  // eslint-disable-next-line no-console
-  console.log(
-    '[settlement-engine] Started. Listening on stream:',
-    config.settlementMatchesStream,
-    'group:',
-    config.consumerGroup,
-    'consumer:',
-    config.consumerName,
-    'batch-size:',
-    config.batchSize,
-    'batch-interval-ms:',
-    config.batchIntervalMs,
+  logger.info(
+    {
+      component: 'settlement-engine',
+      stream: config.settlementMatchesStream,
+      group: config.consumerGroup,
+      consumer: config.consumerName,
+      batchSize: config.batchSize,
+      batchIntervalMs: config.batchIntervalMs,
+    },
+    'Started',
   );
 
   const shutdown = async (signal: string): Promise<void> => {
-    // eslint-disable-next-line no-console
-    console.log(`[settlement-engine] Received ${signal}, shutting down...`);
+    logger.info({ component: 'settlement-engine', signal }, 'Shutting down...');
 
     // Stop batch processor (will process pending batches)
     await batchProcessor.stop();
@@ -99,8 +96,7 @@ const main = async (): Promise<void> => {
     // Close Redis connection
     await closeRedisClient();
 
-    // eslint-disable-next-line no-console
-    console.log('[settlement-engine] Shutdown complete');
+    logger.info({ component: 'settlement-engine' }, 'Shutdown complete');
     process.exit(0);
   };
 
@@ -113,7 +109,6 @@ const main = async (): Promise<void> => {
 };
 
 void main().catch((error) => {
-  // eslint-disable-next-line no-console
-  console.error('[settlement-engine] Fatal error during startup', error);
+  logger.error({ component: 'settlement-engine', err: error }, 'Fatal error during startup');
   process.exit(1);
 });

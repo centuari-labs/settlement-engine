@@ -12,6 +12,7 @@ import {
   type IsolatedTestEnvironment,
 } from '../../tests/helpers/redisTestClient';
 import { createIsolatedTestConfig } from '../../tests/helpers/testConfig';
+import { logger } from '../../logger';
 
 /**
  * Unit tests for settlement match consumer using a real Redis instance.
@@ -222,7 +223,7 @@ describe('readMatches', () => {
   });
 
   it('should log to console.error when onInvalid handler is not provided', async () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+    const loggerSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
     await redis.xadd(
       config.settlementMatchesStream,
       '*',
@@ -239,12 +240,12 @@ describe('readMatches', () => {
     });
 
     expect(matches).toHaveLength(0);
-    expect(consoleSpy).toHaveBeenCalledWith(
-      '[settlement-consumer] Invalid match entry',
-      expect.any(String),
+    expect(loggerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ component: 'settlement-consumer' }),
+      'Invalid match entry',
     );
 
-    consoleSpy.mockRestore();
+    loggerSpy.mockRestore();
   });
 
   it('should return empty array when stream is empty', async () => {
@@ -314,7 +315,7 @@ describe('readMatches', () => {
   }, 15000);
 
   it('should handle errors gracefully', async () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+    const loggerSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
     // Disconnect Redis to cause errors
     await redis.disconnect();
@@ -328,12 +329,12 @@ describe('readMatches', () => {
     });
 
     expect(matches).toHaveLength(0);
-    expect(consoleSpy).toHaveBeenCalledWith(
-      '[settlement-consumer] Error reading matches',
-      expect.any(Error),
+    expect(loggerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ component: 'settlement-consumer' }),
+      'Error reading matches',
     );
 
-    consoleSpy.mockRestore();
+    loggerSpy.mockRestore();
 
     // Wait a bit to ensure cleanup doesn't interfere
     await wait(100);
@@ -560,7 +561,7 @@ describe('processPendingEntriesOnStartup', () => {
   });
 
   it('should handle errors gracefully during pending processing', async () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+    const loggerSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
     await redis.disconnect();
 
@@ -573,12 +574,12 @@ describe('processPendingEntriesOnStartup', () => {
     });
 
     expect(recovered).toHaveLength(0);
-    expect(consoleSpy).toHaveBeenCalledWith(
-      '[settlement-consumer] Error processing pending entries',
-      expect.any(Error),
+    expect(loggerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ component: 'settlement-consumer' }),
+      'Error processing pending entries',
     );
 
-    consoleSpy.mockRestore();
+    loggerSpy.mockRestore();
     await wait(100);
   });
 

@@ -30,6 +30,7 @@ import {
 import type { SettlementResult } from '../smartContract';
 import { createMatch } from '../../tests/helpers/testFixtures';
 import type { AppConfig } from '../../config';
+import { logger } from '../../logger';
 
 const createTestAppConfig = (): AppConfig => ({
   redisUrl: 'redis://localhost:6379',
@@ -357,7 +358,7 @@ describe('database', () => {
   describe('unlockFailedMatches', () => {
     it('should skip matches when account not found', async () => {
       const match = createMatch();
-      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const loggerSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
       mockQuery.mockImplementation((sql: string) => {
         if (sql === 'BEGIN' || sql === 'COMMIT') return { rows: [] };
@@ -366,15 +367,16 @@ describe('database', () => {
       });
 
       await unlockFailedMatches([match]);
-      expect(consoleSpy).toHaveBeenCalledWith(
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ component: 'database' }),
         expect.stringContaining('Cannot unlock match'),
       );
-      consoleSpy.mockRestore();
+      loggerSpy.mockRestore();
     });
 
     it('should skip matches when asset not found', async () => {
       const match = createMatch();
-      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const loggerSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
       mockQuery.mockImplementation((sql: string) => {
         if (sql === 'BEGIN' || sql === 'COMMIT') return { rows: [] };
@@ -386,10 +388,11 @@ describe('database', () => {
       });
 
       await unlockFailedMatches([match]);
-      expect(consoleSpy).toHaveBeenCalledWith(
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ component: 'database' }),
         expect.stringContaining('asset not found'),
       );
-      consoleSpy.mockRestore();
+      loggerSpy.mockRestore();
     });
 
     it('should execute portfolio unlock queries in deadlock-safe order', async () => {
@@ -824,7 +827,7 @@ describe('database', () => {
     it('should skip match upsert when asset not found', async () => {
       const result = createMinimalResult();
       const match = createMatch();
-      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const loggerSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
       mockQuery.mockImplementation((sql: string) => {
         if (sql?.includes?.('INSERT INTO settlement_batches')) {
@@ -844,7 +847,8 @@ describe('database', () => {
         retryDelayMs: 10,
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ component: 'database' }),
         expect.stringContaining('Asset not found'),
       );
 
@@ -853,13 +857,13 @@ describe('database', () => {
       );
       expect(matchInsertCalls.length).toBe(0);
 
-      consoleSpy.mockRestore();
+      loggerSpy.mockRestore();
     });
 
     it('should skip match upsert when lender account not found', async () => {
       const result = createMinimalResult();
       const match = createMatch();
-      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const loggerSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
       mockQuery.mockImplementation((sql: string, params?: string[]) => {
         if (sql?.includes?.('INSERT INTO settlement_batches')) {
@@ -886,11 +890,12 @@ describe('database', () => {
         retryDelayMs: 10,
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ component: 'database' }),
         expect.stringContaining('Lender account not found'),
       );
 
-      consoleSpy.mockRestore();
+      loggerSpy.mockRestore();
     });
   });
 
@@ -1085,7 +1090,7 @@ describe('database', () => {
       };
 
       let phase1Done = false;
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+      const loggerSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
       mockQuery.mockImplementation((sql: string) => {
         if (sql?.includes?.('INSERT INTO settlement_batches')) {
@@ -1113,12 +1118,12 @@ describe('database', () => {
         }),
       ).resolves.toBeUndefined();
 
-      expect(consoleSpy).toHaveBeenCalledWith(
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ component: 'database' }),
         expect.stringContaining('Phase 2 failed'),
-        expect.any(Object),
       );
 
-      consoleSpy.mockRestore();
+      loggerSpy.mockRestore();
     });
   });
 

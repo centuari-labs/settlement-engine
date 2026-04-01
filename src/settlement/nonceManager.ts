@@ -3,6 +3,7 @@ import type { Address, Hash } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { AppConfig } from '../config';
 import { getPublicClient } from './smartContract';
+import { logger } from '../logger';
 
 /**
  * Minimal interface for the public client methods used by NonceManager.
@@ -113,32 +114,23 @@ export class NonceManager {
     // Check for a pending tx from a previous crash
     const pendingTxHash = await this.redis.get(this.keys.pendingTx);
     if (pendingTxHash) {
-      // eslint-disable-next-line no-console
-      console.log('[nonce-manager] Found pending tx from previous run', {
-        txHash: pendingTxHash,
-      });
+      logger.info({ component: 'nonce-manager', txHash: pendingTxHash }, 'Found pending tx from previous run');
       try {
         const receipt = await this.publicClient.waitForTransactionReceipt({
           hash: pendingTxHash as Hash,
           timeout: 5_000, // Short timeout — just checking if it landed
         });
         // Tx landed — clear pending state and reset nonce from chain
-        // eslint-disable-next-line no-console
-        console.log('[nonce-manager] Pending tx confirmed', {
-          txHash: pendingTxHash,
-          status: receipt.status,
-          blockNumber: Number(receipt.blockNumber),
-        });
+        logger.info(
+          { component: 'nonce-manager', txHash: pendingTxHash, status: receipt.status, blockNumber: Number(receipt.blockNumber) },
+          'Pending tx confirmed',
+        );
         await this.redis.del(this.keys.pendingTx);
         await this.resetFromChain();
       } catch {
         // Tx not confirmed — it may be stuck or dropped.
         // Reset nonce from chain to get the correct next nonce.
-        // eslint-disable-next-line no-console
-        console.warn(
-          '[nonce-manager] Pending tx not confirmed, resetting nonce from chain',
-          { txHash: pendingTxHash },
-        );
+        logger.warn({ component: 'nonce-manager', txHash: pendingTxHash }, 'Pending tx not confirmed, resetting nonce from chain');
         await this.redis.del(this.keys.pendingTx);
         await this.resetFromChain();
       }
@@ -159,11 +151,7 @@ export class NonceManager {
     // Start heartbeat to keep the lock alive during tx confirmation
     this.startLockHeartbeat();
 
-    // eslint-disable-next-line no-console
-    console.log('[nonce-manager] Acquired nonce', {
-      nonce,
-      walletAddress: this.walletAddress,
-    });
+    logger.info({ component: 'nonce-manager', nonce, walletAddress: this.walletAddress }, 'Acquired nonce');
 
     return nonce;
   }
@@ -176,8 +164,7 @@ export class NonceManager {
    */
   async confirmNonce(txHash: Hash): Promise<void> {
     await this.redis.set(this.keys.pendingTx, txHash);
-    // eslint-disable-next-line no-console
-    console.log('[nonce-manager] Recorded pending tx', { txHash });
+    logger.info({ component: 'nonce-manager', txHash }, 'Recorded pending tx');
   }
 
   /**
@@ -207,35 +194,19 @@ export class NonceManager {
       errorMessage.includes('nonce has already been used')
     ) {
       // Nonce was consumed by another tx — reset from chain
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[nonce-manager] Nonce too low, resetting from chain',
-        { errorMessage },
-      );
+      logger.warn({ component: 'nonce-manager', errorMessage }, 'Nonce too low, resetting from chain');
       await this.resetFromChain();
     } else if (errorMessage.includes('already known')) {
       // Tx was already submitted to mempool — it may still confirm
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[nonce-manager] Tx already known in mempool',
-        { errorMessage },
-      );
+      logger.warn({ component: 'nonce-manager', errorMessage }, 'Tx already known in mempool');
       // Don't change nonce — the tx is in the mempool and may confirm
     } else if (errorMessage.includes('replacement transaction underpriced')) {
       // Same nonce tx exists with higher gas — decrement so next retry uses same nonce
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[nonce-manager] Replacement underpriced',
-        { errorMessage },
-      );
+      logger.warn({ component: 'nonce-manager', errorMessage }, 'Replacement underpriced');
       await this.redis.decr(this.keys.nonce);
     } else {
       // Network error or other pre-submission failure — tx was never sent, decrement nonce
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[nonce-manager] Pre-submission failure, decrementing nonce',
-        { errorMessage },
-      );
+      logger.warn({ component: 'nonce-manager', errorMessage }, 'Pre-submission failure, decrementing nonce');
       await this.redis.decr(this.keys.nonce);
     }
 
@@ -253,11 +224,7 @@ export class NonceManager {
       blockTag: 'pending',
     });
     await this.redis.set(this.keys.nonce, nonce.toString());
-    // eslint-disable-next-line no-console
-    console.log('[nonce-manager] Reset nonce from chain', {
-      nonce,
-      walletAddress: this.walletAddress,
-    });
+    logger.info({ component: 'nonce-manager', nonce, walletAddress: this.walletAddress }, 'Reset nonce from chain');
   }
 
   /**
@@ -339,8 +306,7 @@ export class NonceManager {
           this.lockTtlMs.toString(),
         )
         .catch((err) => {
-          // eslint-disable-next-line no-console
-          console.error('[nonce-manager] Failed to extend lock TTL', err);
+          logger.error({ component: 'nonce-manager', err }, 'Failed to extend lock TTL');
         });
     }, intervalMs);
   }

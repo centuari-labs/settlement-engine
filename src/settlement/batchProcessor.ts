@@ -19,6 +19,7 @@ import {
   restoreOrdersForFailedMatches,
 } from './database';
 import type { NonceManager } from './nonceManager';
+import { logger } from '../logger';
 
 /**
  * Options for creating a batch processor.
@@ -99,22 +100,21 @@ export class BatchProcessor {
    */
   start(): void {
     if (this.isRunning) {
-      // eslint-disable-next-line no-console
-      console.warn('[batch-processor] Already running');
+      logger.warn({ component: 'batch-processor' }, 'Already running');
       return;
     }
 
     this.isRunning = true;
 
-    // eslint-disable-next-line no-console
-    console.log(
-      '[batch-processor] Starting batch processor',
+    logger.info(
       {
+        component: 'batch-processor',
         pollIntervalMs: this.config.pollIntervalMs,
         batchSize: this.config.batchSize,
         batchIntervalMs: this.config.batchIntervalMs,
         pendingReclaimIntervalMs: this.config.pendingReclaimIntervalMs,
       },
+      'Starting batch processor',
     );
 
     // Start polling loop (reads new entries only)
@@ -148,8 +148,7 @@ export class BatchProcessor {
       return;
     }
 
-    // eslint-disable-next-line no-console
-    console.log('[batch-processor] Stopping batch processor...');
+    logger.info({ component: 'batch-processor' }, 'Stopping batch processor...');
 
     this.isRunning = false;
 
@@ -179,15 +178,14 @@ export class BatchProcessor {
     // Process any remaining matches in the accumulator
     const pendingCount = this.accumulator.getPendingCount();
     if (pendingCount > 0) {
-      // eslint-disable-next-line no-console
-      console.log(
-        `[batch-processor] Processing ${pendingCount} pending matches before shutdown`,
+      logger.info(
+        { component: 'batch-processor', pendingCount },
+        'Processing pending matches before shutdown',
       );
       await this.processBatch();
     }
 
-    // eslint-disable-next-line no-console
-    console.log('[batch-processor] Batch processor stopped');
+    logger.info({ component: 'batch-processor' }, 'Batch processor stopped');
   }
 
   /**
@@ -226,9 +224,13 @@ export class BatchProcessor {
         const matches = await readMatches(this.readMatchesOptions);
         if (matches.length > 0) {
           this.accumulator.addMatches(matches);
-          // eslint-disable-next-line no-console
-          console.log(
-            `[batch-processor] Read ${matches.length} new matches, accumulator now has ${this.accumulator.getPendingCount()} pending`,
+          logger.info(
+            {
+              component: 'batch-processor',
+              newMatches: matches.length,
+              pending: this.accumulator.getPendingCount(),
+            },
+            'Read new matches',
           );
         }
       }
@@ -240,8 +242,7 @@ export class BatchProcessor {
         this.processingPromise = null;
       }
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[batch-processor] Error in poll', error);
+      logger.error({ component: 'batch-processor', err: error }, 'Error in poll');
       // Ensure processing promise is cleared even if processBatch throws
       if (this.processingPromise) {
         this.processingPromise = null;
@@ -262,59 +263,55 @@ export class BatchProcessor {
     const startTime = Date.now();
 
     try {
-      // eslint-disable-next-line no-console
-      console.log(
-        `[batch-processor] Processing batch of ${batch.length} matches`,
+      logger.info(
+        { component: 'batch-processor', matchCount: batch.length },
+        'Processing batch',
       );
 
       await processSettlementBatch(batch, this.batchContext, this.config);
 
       const duration = Date.now() - startTime;
 
-      // eslint-disable-next-line no-console
-      console.log(
-        `[batch-processor] Batch processing successful`,
-        {
-          matchCount: batch.length,
-          duration,
-        },
+      logger.info(
+        { component: 'batch-processor', matchCount: batch.length, duration },
+        'Batch processing successful',
       );
       this.consecutiveFailures = 0;
     } catch (error) {
       const duration = Date.now() - startTime;
 
       if (error instanceof BatchProcessingError) {
-        // eslint-disable-next-line no-console
-        console.error(
-          `[batch-processor] Batch processing failed`,
+        logger.error(
           {
+            component: 'batch-processor',
             matchCount: batch.length,
             duration,
             retryable: error.retryable,
-            error: error.message,
+            err: error,
           },
+          'Batch processing failed',
         );
 
         // Matches remain in Redis pending state (not ACKed) for retry
         // Retryable errors will be retried through pending entry processing
         // Non-retryable errors remain in pending state for manual intervention
         if (error.retryable) {
-          // eslint-disable-next-line no-console
-          console.log(
-            `[batch-processor] Retryable error, matches remain in Redis pending state for retry`,
+          logger.info(
             {
+              component: 'batch-processor',
               matchCount: batch.length,
               matchIds: batch.map((m) => m.id),
             },
+            'Retryable error, matches remain in Redis pending state for retry',
           );
         } else {
-          // eslint-disable-next-line no-console
-          console.error(
-            `[batch-processor] Non-retryable error, running full failure cleanup`,
+          logger.error(
             {
+              component: 'batch-processor',
               matchIds: batch.map((m) => m.id),
               errorCode: (error.originalError as any)?.code,
             },
+            'Non-retryable error, running full failure cleanup',
           );
 
           const payloads = batch.map((m) => m.payload);
@@ -324,24 +321,21 @@ export class BatchProcessor {
           try {
             await unlockFailedMatches(payloads);
           } catch (e) {
-            // eslint-disable-next-line no-console
-            console.error(`[batch-processor] Failed to unlock portfolio amounts`, e);
+            logger.error({ component: 'batch-processor', err: e }, 'Failed to unlock portfolio amounts');
           }
 
           // 2. Mark matches as FAILED in database
           try {
             await recordFailedMatches(payloads, failureReason);
           } catch (e) {
-            // eslint-disable-next-line no-console
-            console.error(`[batch-processor] Failed to record match failures`, e);
+            logger.error({ component: 'batch-processor', err: e }, 'Failed to record match failures');
           }
 
           // 3. Restore order quantities (reduce filled_quantity, cancel/partially_fill)
           try {
             await restoreOrdersForFailedMatches(payloads);
           } catch (e) {
-            // eslint-disable-next-line no-console
-            console.error(`[batch-processor] Failed to restore order quantities`, e);
+            logger.error({ component: 'batch-processor', err: e }, 'Failed to restore order quantities');
           }
 
           // 4. ACK + delete Redis entries to prevent infinite retry loop
@@ -352,13 +346,12 @@ export class BatchProcessor {
               );
               await this.batchContext.redis.xdel(match.stream, match.id);
             }
-            // eslint-disable-next-line no-console
-            console.log(
-              `[batch-processor] ACKed and deleted ${batch.length} failed entries from Redis`,
+            logger.info(
+              { component: 'batch-processor', count: batch.length },
+              'ACKed and deleted failed entries from Redis',
             );
           } catch (e) {
-            // eslint-disable-next-line no-console
-            console.error(`[batch-processor] Failed to ACK/delete Redis entries`, e);
+            logger.error({ component: 'batch-processor', err: e }, 'Failed to ACK/delete Redis entries');
           }
 
           // Entries are cleaned up — no backoff needed, don't re-throw
@@ -367,15 +360,15 @@ export class BatchProcessor {
         }
       } else {
         // Unexpected error - matches remain in Redis pending state for retry
-        // eslint-disable-next-line no-console
-        console.error(
-          `[batch-processor] Unexpected error during batch processing, matches remain in Redis pending state`,
+        logger.error(
           {
+            component: 'batch-processor',
             matchCount: batch.length,
             duration,
-            error,
+            err: error,
             matchIds: batch.map((m) => m.id),
           },
+          'Unexpected error during batch processing, matches remain in Redis pending state',
         );
       }
 
@@ -385,9 +378,9 @@ export class BatchProcessor {
         this.config.failureBackoffMaxMs,
       );
       this.nextRetryAt = Date.now() + delay;
-      // eslint-disable-next-line no-console
-      console.log(
-        `[batch-processor] Backing off for ${delay}ms (failure ${this.consecutiveFailures})`,
+      logger.info(
+        { component: 'batch-processor', delayMs: delay, failures: this.consecutiveFailures },
+        'Backing off after failure',
       );
 
       throw error;
@@ -422,14 +415,17 @@ export class BatchProcessor {
       );
       if (pendingMatches.length > 0) {
         this.accumulator.addMatches(pendingMatches);
-        // eslint-disable-next-line no-console
-        console.log(
-          `[batch-processor] Reclaimed ${pendingMatches.length} pending matches, accumulator now has ${this.accumulator.getPendingCount()} pending`,
+        logger.info(
+          {
+            component: 'batch-processor',
+            reclaimed: pendingMatches.length,
+            pending: this.accumulator.getPendingCount(),
+          },
+          'Reclaimed pending matches',
         );
       }
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[batch-processor] Error reclaiming pending entries', error);
+      logger.error({ component: 'batch-processor', err: error }, 'Error reclaiming pending entries');
     }
   }
 
@@ -450,34 +446,33 @@ export class BatchProcessor {
         return;
       }
 
-      // eslint-disable-next-line no-console
-      console.log(
-        `[batch-processor] Found ${unprocessed.length} unprocessed settlement batches, retrying event processing`,
+      logger.info(
+        { component: 'batch-processor', count: unprocessed.length },
+        'Found unprocessed settlement batches, retrying event processing',
       );
 
       for (const batch of unprocessed) {
         try {
           await retryEventProcessing(batch.id, batch.rawEvents, this.config);
 
-          // eslint-disable-next-line no-console
-          console.log(
-            `[batch-processor] Successfully recovered events for batch ${batch.id}`,
+          logger.info(
+            { component: 'batch-processor', batchId: batch.id },
+            'Successfully recovered events for batch',
           );
         } catch (error) {
-          // eslint-disable-next-line no-console
-          console.error(
-            `[batch-processor] Failed to recover events for batch ${batch.id}`,
+          logger.error(
             {
-              error: error instanceof Error ? error.message : String(error),
+              component: 'batch-processor',
+              batchId: batch.id,
+              err: error instanceof Error ? error.message : String(error),
             },
+            'Failed to recover events for batch',
           );
           // Continue with other batches — don't let one failure block the rest
         }
       }
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[batch-processor] Error in event recovery loop', error);
+      logger.error({ component: 'batch-processor', err: error }, 'Error in event recovery loop');
     }
   }
 }
-

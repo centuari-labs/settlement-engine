@@ -18,6 +18,7 @@ import {
 } from '../../tests/helpers/redisTestClient';
 import { createIsolatedTestConfig } from '../../tests/helpers/testConfig';
 import type { AppConfig } from '../../config';
+import { logger } from '../../logger';
 
 // Mock only processSettlementBatch to avoid actual settlement execution
 jest.mock('../processBatch');
@@ -112,16 +113,17 @@ describe('BatchProcessor', () => {
     });
 
     it('should warn if already running', () => {
-      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const loggerSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
       processor.start();
       processor.start(); // Try to start again
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '[batch-processor] Already running',
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ component: 'batch-processor' }),
+        'Already running',
       );
 
-      consoleSpy.mockRestore();
+      loggerSpy.mockRestore();
     });
 
     it('should add matches to accumulator when read', async () => {
@@ -463,7 +465,7 @@ describe('BatchProcessor', () => {
     });
 
     it('should handle readMatches errors gracefully', async () => {
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+      const loggerSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
       // Create a mock Redis client that simulates a closed connection
       // This avoids closing the shared singleton which affects other tests
@@ -491,18 +493,18 @@ describe('BatchProcessor', () => {
 
       // Wait for error to be logged
       await waitForCondition(
-        () => consoleSpy.mock.calls.some(
-          (call) => call[0] === '[batch-processor] Error in poll',
+        () => loggerSpy.mock.calls.some(
+          (call) => call[1] === 'Error in poll',
         ),
         5000,
       );
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '[batch-processor] Error in poll',
-        expect.any(Error),
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ component: 'batch-processor' }),
+        'Error in poll',
       );
 
-      consoleSpy.mockRestore();
+      loggerSpy.mockRestore();
 
       // Stop the isolated processor - it may error since Redis is mocked, that's fine
       try {
@@ -707,7 +709,7 @@ describe('BatchProcessor', () => {
 
   describe('Redis connection check', () => {
     it('should log error when Redis is not ready', async () => {
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+      const loggerSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
       const mockRedis = {
         status: 'end',
@@ -731,20 +733,23 @@ describe('BatchProcessor', () => {
       isolatedProcessor.start();
 
       await waitForCondition(
-        () => consoleSpy.mock.calls.some(
-          (call) => call[0] === '[batch-processor] Error in poll',
+        () => loggerSpy.mock.calls.some(
+          (call) => call[1] === 'Error in poll',
         ),
         5000,
       );
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '[batch-processor] Error in poll',
+      expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining('Redis connection is not ready'),
+          component: 'batch-processor',
+          err: expect.objectContaining({
+            message: expect.stringContaining('Redis connection is not ready'),
+          }),
         }),
+        'Error in poll',
       );
 
-      consoleSpy.mockRestore();
+      loggerSpy.mockRestore();
 
       try {
         await isolatedProcessor.stop();
@@ -853,7 +858,7 @@ describe('BatchProcessor', () => {
       // Make unlockFailedMatches fail
       mockUnlockFailedMatches.mockRejectedValue(new Error('cleanup failed'));
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+      const loggerSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
       // Add 3 matches to meet batchSize threshold (batchSize=3)
       const matches = [
@@ -881,17 +886,17 @@ describe('BatchProcessor', () => {
       // Wait for cleanup to attempt and fail
       await wait(500);
 
-      // Assert console.error was called with a message about failing to unlock
-      expect(consoleSpy).toHaveBeenCalledWith(
+      // Assert logger.error was called with a message about failing to unlock
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ component: 'batch-processor' }),
         expect.stringContaining('Failed to unlock'),
-        expect.any(Error),
       );
 
       // Processor should still be running (not crashed)
       // Verify by adding another match and seeing it get processed
       expect(processor).toBeDefined();
 
-      consoleSpy.mockRestore();
+      loggerSpy.mockRestore();
     }, 15000);
 
     it('should reset consecutiveFailures after non-retryable cleanup', async () => {

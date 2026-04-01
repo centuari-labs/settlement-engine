@@ -1,6 +1,7 @@
 import type Redis from 'ioredis';
 import type { MatchWithMeta } from '../redis/settlementMatchConsumer';
 import type { AppConfig } from '../config';
+import { logger } from '../logger';
 import {
   settleBatch,
   filterAlreadySettledMatches,
@@ -114,15 +115,18 @@ export const processSettlementBatch = async (
   //@todo : what if only 1 matches that is not valid, that will make the entire transaction fail, we need to handle this case.
   //@todo : if calling the smart contract failed, we need to handle the error and retry the transaction.
 
-  // eslint-disable-next-line no-console
-  console.log(
-    `[process-settlement-batch] Processing batch of ${matches.length} matches`,
-    matches.map((match) => ({
-      id: match.id,
-      matchId: match.payload.matchId,
-      lendOrderId: match.payload.lendOrderId,
-      borrowOrderId: match.payload.borrowOrderId,
-    })),
+  logger.info(
+    {
+      component: 'process-settlement-batch',
+      matchCount: matches.length,
+      matches: matches.map((match) => ({
+        id: match.id,
+        matchId: match.payload.matchId,
+        lendOrderId: match.payload.lendOrderId,
+        borrowOrderId: match.payload.borrowOrderId,
+      })),
+    },
+    'Processing batch',
   );
 
   // Step 0: Filter out already-settled matches (prevents infinite retry loop)
@@ -133,9 +137,9 @@ export const processSettlementBatch = async (
 
   if (alreadySettled.length > 0) {
     await ackAndDeleteEntries(context, alreadySettled);
-    // eslint-disable-next-line no-console
-    console.log(
-      `[process-settlement-batch] ACKed ${alreadySettled.length} already-settled matches`,
+    logger.info(
+      { component: 'process-settlement-batch', count: alreadySettled.length },
+      'ACKed already-settled matches',
     );
   }
 
@@ -155,16 +159,16 @@ export const processSettlementBatch = async (
     });
     const duration = Date.now() - startTime;
 
-    // eslint-disable-next-line no-console
-    console.log(
-      `[process-settlement-batch] Smart contract settlement successful`,
+    logger.info(
       {
+        component: 'process-settlement-batch',
         transactionHash: settlementResult.transactionHash,
         blockNumber: settlementResult.blockNumber,
         gasUsed: settlementResult.gasUsed,
         duration,
         matchCount: unsettled.length,
       },
+      'Smart contract settlement successful',
     );
   } catch (error) {
     const settlementError = error as SettlementError;
@@ -173,15 +177,15 @@ export const processSettlementBatch = async (
         ? settlementError.retryable
         : true;
 
-    // eslint-disable-next-line no-console
-    console.error(
-      `[process-settlement-batch] Smart contract settlement failed`,
+    logger.error(
       {
-        error: settlementError.message,
+        component: 'process-settlement-batch',
+        err: settlementError.message,
         code: settlementError.code,
         retryable: isRetryable,
         matchCount: unsettled.length,
       },
+      'Smart contract settlement failed',
     );
 
     throw new BatchProcessingError(
@@ -210,13 +214,9 @@ export const processSettlementBatch = async (
     });
     const duration = Date.now() - startTime;
 
-    // eslint-disable-next-line no-console
-    console.log(
-      `[process-settlement-batch] Database persistence successful`,
-      {
-        duration,
-        matchCount: unsettled.length,
-      },
+    logger.info(
+      { component: 'process-settlement-batch', duration, matchCount: unsettled.length },
+      'Database persistence successful',
     );
   } catch (error) {
     // Phase 1 failed — settlement records not committed.
@@ -226,15 +226,15 @@ export const processSettlementBatch = async (
     const isRetryable =
       dbError.retryable !== undefined ? dbError.retryable : true;
 
-    // eslint-disable-next-line no-console
-    console.error(
-      `[process-settlement-batch] Database persistence Phase 1 failed`,
+    logger.error(
       {
-        error: dbError.message,
+        component: 'process-settlement-batch',
+        err: dbError.message,
         code: dbError.code,
         retryable: isRetryable,
         matchCount: unsettled.length,
       },
+      'Database persistence Phase 1 failed',
     );
 
     throw new BatchProcessingError(
@@ -258,13 +258,13 @@ export const processSettlementBatch = async (
     context.streamMaxLen,
   );
 
-  // eslint-disable-next-line no-console
-  console.log(
-    `[process-settlement-batch] Batch processing complete`,
+  logger.info(
     {
+      component: 'process-settlement-batch',
       matchCount: unsettled.length,
       transactionHash: settlementResult.transactionHash,
     },
+    'Batch processing complete',
   );
 };
 

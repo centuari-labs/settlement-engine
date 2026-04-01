@@ -1,4 +1,5 @@
 import type { Match } from '../../schemas/match';
+import { logger } from '../../logger';
 import type { AppConfig } from '../../config';
 import { getPool, withTransaction } from './connection';
 import type { RawSettlementEvents } from './connection';
@@ -73,10 +74,7 @@ export const unlockFailedMatches = async (
       );
 
       if (!lenderResult.rows[0] || !borrowerResult.rows[0]) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[database] Cannot unlock match ${match.matchId}: account not found`,
-        );
+        logger.warn({ component: 'database', matchId: match.matchId }, 'Cannot unlock match: account not found');
         continue;
       }
 
@@ -86,10 +84,7 @@ export const unlockFailedMatches = async (
         [match.loanToken],
       );
       if (!assetResult.rows[0]) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[database] Cannot unlock match ${match.matchId}: asset not found for token ${match.loanToken}`,
-        );
+        logger.warn({ component: 'database', matchId: match.matchId, loanToken: match.loanToken }, 'Cannot unlock match: asset not found');
         continue;
       }
 
@@ -144,8 +139,7 @@ export const unlockFailedMatches = async (
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
-    // eslint-disable-next-line no-console
-    console.error('[database] Failed to unlock failed matches:', error);
+    logger.error({ component: 'database', err: error }, 'Failed to unlock failed matches');
   } finally {
     client.release();
   }
@@ -181,8 +175,7 @@ export const recordFailedMatches = async (
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
-    // eslint-disable-next-line no-console
-    console.error('[database] Failed to record failed matches:', error);
+    logger.error({ component: 'database', err: error }, 'Failed to record failed matches');
   } finally {
     client.release();
   }
@@ -251,8 +244,7 @@ export const restoreOrdersForFailedMatches = async (
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
-    // eslint-disable-next-line no-console
-    console.error('[database] Failed to restore orders for failed matches:', error);
+    logger.error({ component: 'database', err: error }, 'Failed to restore orders for failed matches');
   } finally {
     client.release();
   }

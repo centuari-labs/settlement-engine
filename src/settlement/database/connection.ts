@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
+import { logger } from '../../logger';
 import { Pool as PgPool } from 'pg';
 import { z } from 'zod';
 import type {
@@ -234,29 +235,29 @@ export const executeWithRetry = async <T>(
       const dbError = mapPostgresErrorToDatabaseError(error);
 
       if (!dbError.retryable || attempt >= maxRetries) {
-        // eslint-disable-next-line no-console
-        console.error(
-          '[database] Persistence failed (non-retryable or max retries reached)',
+        logger.error(
           {
+            component: 'database',
             message: dbError.message,
             code: dbError.code,
             retryable: dbError.retryable,
             attempt,
             maxRetries,
           },
+          'Persistence failed (non-retryable or max retries reached)',
         );
         throw dbError;
       }
 
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[database] Retryable error during persistence (attempt ${attempt + 1} of ${
-          maxRetries + 1
-        })`,
+      logger.warn(
         {
+          component: 'database',
           message: dbError.message,
           code: dbError.code,
+          attempt: attempt + 1,
+          total: maxRetries + 1,
         },
+        'Retryable error during persistence',
       );
 
       await new Promise((resolve) => setTimeout(resolve, delay));

@@ -1,5 +1,6 @@
 import type Redis from 'ioredis';
 import { matchSchema, type Match } from '../schemas/match';
+import { logger } from '../logger';
 
 type StreamEntry = [string, string[]];
 type StreamReadResult = [string, StreamEntry[]][];
@@ -64,8 +65,7 @@ export const ensureConsumerGroup = async (
 ): Promise<void> => {
   try {
     await redis.xgroup('CREATE', stream, group, '0', 'MKSTREAM');
-    // eslint-disable-next-line no-console
-    console.log(`Created consumer group "${group}" on stream "${stream}"`);
+    logger.info({ component: 'settlement-consumer', group, stream }, 'Created consumer group');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('BUSYGROUP')) {
@@ -185,11 +185,7 @@ const processEntry = async (
         error: new Error('Validation failed for match entry'),
       });
     } else {
-      // eslint-disable-next-line no-console
-      console.error(
-        '[settlement-consumer] Invalid match entry',
-        JSON.stringify({ stream, id, raw: rawFields }),
-      );
+      logger.error({ component: 'settlement-consumer', stream, id, raw: rawFields }, 'Invalid match entry');
     }
 
     // ACK invalid entries immediately to avoid blocking
@@ -257,11 +253,7 @@ export const readMatches = async (
               error: new Error('Validation failed for match entry'),
             });
           } else {
-            // eslint-disable-next-line no-console
-            console.error(
-              '[settlement-consumer] Invalid match entry',
-              JSON.stringify({ stream: streamName, id, raw: rawFields }),
-            );
+            logger.error({ component: 'settlement-consumer', stream: streamName, id, raw: rawFields }, 'Invalid match entry');
           }
 
           // ACK invalid entries immediately to avoid blocking
@@ -281,8 +273,7 @@ export const readMatches = async (
 
     return matches;
   } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error('[settlement-consumer] Error reading matches', error);
+    logger.error({ component: 'settlement-consumer', err: error }, 'Error reading matches');
     // Return empty array on error to allow graceful degradation
     return [];
   }
@@ -367,8 +358,7 @@ const processPendingEntries = async (
         hasMorePending = false;
       }
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[settlement-consumer] Error processing pending entries', error);
+      logger.error({ component: 'settlement-consumer', err: error }, 'Error processing pending entries');
       hasMorePending = false;
     }
   }
@@ -454,8 +444,7 @@ const processPendingEntries = async (
         hasMoreStaleEntries = false;
       }
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[settlement-consumer] Error claiming stale entries', error);
+      logger.error({ component: 'settlement-consumer', err: error }, 'Error claiming stale entries');
       hasMoreStaleEntries = false;
     }
   }
