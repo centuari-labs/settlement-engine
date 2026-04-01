@@ -2,6 +2,7 @@ import type Redis from 'ioredis';
 import {
   ensureConsumerGroup,
   readMatches,
+  processPendingEntriesOnStartup,
 } from '../settlementMatchConsumer';
 import type { AppConfig } from '../../config';
 import { createMatch } from '../../tests/helpers/testFixtures';
@@ -337,4 +338,285 @@ describe('readMatches', () => {
     // Wait a bit to ensure cleanup doesn't interfere
     await wait(100);
   }, 15000);
+});
+
+describe('processPendingEntriesOnStartup', () => {
+  let testEnv: IsolatedTestEnvironment;
+  let redis: Redis;
+  let config: AppConfig;
+
+  jest.setTimeout(30000);
+
+  beforeEach(async () => {
+    config = createIsolatedTestConfig();
+    testEnv = await createIsolatedTestEnvironment(config);
+    redis = testEnv.redis;
+  }, 30000);
+
+  afterEach(async () => {
+    await testEnv.cleanup();
+  }, 30000);
+
+  it('should recover own pending entries (Phase 1 — "0" cursor)', async () => {
+    const match = createMatch();
+    // Add an entry and read it (creates a pending entry for this consumer)
+    await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      'data',
+      JSON.stringify(match),
+    );
+
+    // Read it so it becomes pending (assigned to this consumer but not ACKed)
+    const initial = await readMatches({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
+    });
+    expect(initial).toHaveLength(1);
+
+    // Now call processPendingEntriesOnStartup — it should re-read the pending entry
+    const recovered = await processPendingEntriesOnStartup({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
+    });
+
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]?.payload.matchId).toBe(match.matchId);
+  });
+
+  it('should return empty array when no pending entries exist', async () => {
+    const recovered = await processPendingEntriesOnStartup({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
+    });
+
+    expect(recovered).toHaveLength(0);
+  });
+
+  it('should recover multiple pending entries', async () => {
+    // Add 5 entries
+    const matches = Array.from({ length: 5 }, (_, i) =>
+      createMatch({ matchId: `550e8400-e29b-41d4-a716-${String(i).padStart(12, '0')}` }),
+    );
+    for (const match of matches) {
+      await redis.xadd(
+        config.settlementMatchesStream,
+        '*',
+        'data',
+        JSON.stringify(match),
+      );
+    }
+
+    // Read them all so they become pending
+    await readMatches({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: 10,
+    });
+
+    // Recover all pending entries
+    const recovered = await processPendingEntriesOnStartup({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: 10,
+    });
+
+    expect(recovered).toHaveLength(5);
+    // Verify all match IDs are present
+    const recoveredIds = recovered.map((m) => m.payload.matchId).sort();
+    const expectedIds = matches.map((m) => m.matchId).sort();
+    expect(recoveredIds).toEqual(expectedIds);
+  });
+
+  it('should respect maxEntries cap between iterations', async () => {
+    // Add 6 entries and make them pending
+    const matches = Array.from({ length: 6 }, (_, i) =>
+      createMatch({ matchId: `550e8400-e29b-41d4-a716-${String(i).padStart(12, '0')}` }),
+    );
+    for (const match of matches) {
+      await redis.xadd(
+        config.settlementMatchesStream,
+        '*',
+        'data',
+        JSON.stringify(match),
+      );
+    }
+
+    await readMatches({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: 10,
+    });
+
+    // Use readCount=3 and maxEntries=3: first iteration reads 3 entries,
+    // then cap check prevents a second iteration
+    const recovered = await processPendingEntriesOnStartup({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: 3,
+      maxEntries: 3,
+    });
+
+    // First iteration reads exactly readCount (3) entries, then cap stops further reads
+    expect(recovered).toHaveLength(3);
+  });
+
+  it('should XCLAIM stale entries from other consumers (Phase 2)', async () => {
+    // Create a second consumer in the same group
+    const otherConsumer = 'other-consumer-stale';
+    const match = createMatch();
+
+    await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      'data',
+      JSON.stringify(match),
+    );
+
+    // Read with the OTHER consumer so it owns the pending entry
+    await (redis.xreadgroup as (...args: (string | number)[]) => Promise<unknown>)(
+      'GROUP',
+      config.consumerGroup,
+      otherConsumer,
+      'COUNT',
+      10,
+      'STREAMS',
+      config.settlementMatchesStream,
+      '>',
+    );
+
+    // Wait for the entry to become idle enough for XCLAIM
+    await wait(200);
+
+    // Now call processPendingEntriesOnStartup as our consumer with low idle threshold
+    const recovered = await processPendingEntriesOnStartup({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
+      xclaimMinIdleMs: 100, // Low threshold so our 200ms idle entry gets claimed
+    });
+
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]?.payload.matchId).toBe(match.matchId);
+  });
+
+  it('should not XCLAIM entries that are not idle long enough', async () => {
+    const otherConsumer = 'other-consumer-fresh';
+    const match = createMatch();
+
+    await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      'data',
+      JSON.stringify(match),
+    );
+
+    // Read with the other consumer
+    await (redis.xreadgroup as (...args: (string | number)[]) => Promise<unknown>)(
+      'GROUP',
+      config.consumerGroup,
+      otherConsumer,
+      'COUNT',
+      10,
+      'STREAMS',
+      config.settlementMatchesStream,
+      '>',
+    );
+
+    // Don't wait — entry is fresh
+
+    // Call with high idle threshold — should not claim the fresh entry
+    const recovered = await processPendingEntriesOnStartup({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
+      xclaimMinIdleMs: 60000, // 60s — entry is only a few ms old
+    });
+
+    // Phase 1 (own pending) returns nothing because our consumer has no pending
+    // Phase 2 (XCLAIM) returns nothing because the entry isn't idle enough
+    expect(recovered).toHaveLength(0);
+  });
+
+  it('should handle errors gracefully during pending processing', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+
+    await redis.disconnect();
+
+    const recovered = await processPendingEntriesOnStartup({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
+    });
+
+    expect(recovered).toHaveLength(0);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[settlement-consumer] Error processing pending entries',
+      expect.any(Error),
+    );
+
+    consoleSpy.mockRestore();
+    await wait(100);
+  });
+
+  it('should ACK invalid pending entries and exclude them from results', async () => {
+    const onInvalid = jest.fn().mockResolvedValue(undefined);
+
+    // Add an invalid entry
+    await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      'data',
+      JSON.stringify({ invalid: 'not-a-match' }),
+    );
+
+    // Read it to make it pending
+    await readMatches({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: 10,
+      onInvalid,
+    });
+
+    // The first readMatches already ACKed the invalid entry.
+    // Reset the mock to track calls from processPendingEntriesOnStartup
+    onInvalid.mockClear();
+
+    const recovered = await processPendingEntriesOnStartup({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: 10,
+      onInvalid,
+    });
+
+    // No valid matches should be returned
+    expect(recovered).toHaveLength(0);
+  });
 });

@@ -19,12 +19,15 @@ beforeEach(() => {
 
   // Default: filterAlreadySettledMatches returns all matches as unsettled
   // (no matches already settled on-chain). Tests can override if needed.
+  // Guard: skip if smartContract was unmocked (e.g. in smartContract.test.ts).
   const smartContract = require('../settlement/smartContract');
-  smartContract.filterAlreadySettledMatches.mockImplementation(
-    async (matches: readonly { id: string; stream: string; payload: unknown }[]) => ({
-      unsettled: [...matches],
-      alreadySettled: [],
-    }),
-  );
+  if (typeof smartContract.filterAlreadySettledMatches.mockImplementation === 'function') {
+    smartContract.filterAlreadySettledMatches.mockImplementation(
+      async (matches: readonly { id: string; stream: string; payload: unknown }[]) => ({
+        unsettled: [...matches],
+        alreadySettled: [],
+      }),
+    );
+  }
 });
 

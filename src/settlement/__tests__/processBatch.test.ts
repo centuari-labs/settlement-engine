@@ -1,5 +1,5 @@
 import type Redis from 'ioredis';
-import { processSettlementBatch, type SettlementBatchContext } from '../processBatch';
+import { processSettlementBatch, BatchProcessingError, type SettlementBatchContext } from '../processBatch';
 import {
   createMatch,
   createMatchBatch,
@@ -9,7 +9,8 @@ import { getRedisClient, closeRedisClient } from '../../redis/client';
 import { cleanupTestStreams } from '../../tests/helpers/redisTestClient';
 import { createTestConfig } from '../../tests/helpers/testConfig';
 import { persistSettlementResults } from '../database';
-import { setupMockSettleBatch, getMockSettleBatch } from '../../tests/helpers/mockSmartContract';
+import { filterAlreadySettledMatches, settleBatch } from '../smartContract';
+import { setupMockSettleBatch, getMockSettleBatch, setupMockSettleBatchError, createSettlementError } from '../../tests/helpers/mockSmartContract';
 
 // Mock database to avoid random failures
 jest.mock('../database');
@@ -321,6 +322,262 @@ describe('processSettlementBatch', () => {
       });
       redis = getRedisClient(config);
     }
+  });
+
+  describe('already-settled filter', () => {
+    it('should ACK and delete already-settled matches and continue with unsettled', async () => {
+      const mockFilter = filterAlreadySettledMatches as jest.MockedFunction<
+        typeof filterAlreadySettledMatches
+      >;
+
+      const match1 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
+      const match2 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' });
+
+      // Add entries to stream
+      const entryId1 = await redis.xadd(context.stream, '*', 'data', JSON.stringify(match1));
+      const entryId2 = await redis.xadd(context.stream, '*', 'data', JSON.stringify(match2));
+
+      if (!entryId1 || !entryId2) throw new Error('Failed to add entries');
+
+      const matchMeta1 = createMatchWithMeta(match1, { id: entryId1, stream: context.stream });
+      const matchMeta2 = createMatchWithMeta(match2, { id: entryId2, stream: context.stream });
+
+      // Mock: match1 already settled, match2 unsettled
+      mockFilter.mockResolvedValueOnce({
+        unsettled: [matchMeta2],
+        alreadySettled: [matchMeta1],
+      });
+
+      await processSettlementBatch([matchMeta1, matchMeta2], context, testConfig);
+
+      // Both entries should be deleted
+      const length = await redis.xlen(context.stream);
+      expect(length).toBe(0);
+
+      // settleBatch should have been called only with unsettled match
+      expect(mockSettleBatch).toHaveBeenCalled();
+    });
+
+    it('should return early when all matches are already settled', async () => {
+      const mockFilter = filterAlreadySettledMatches as jest.MockedFunction<
+        typeof filterAlreadySettledMatches
+      >;
+
+      const match = createMatch();
+      const entryId = await redis.xadd(context.stream, '*', 'data', JSON.stringify(match));
+      if (!entryId) throw new Error('Failed to add entry');
+
+      const matchMeta = createMatchWithMeta(match, { id: entryId, stream: context.stream });
+
+      // Mock: all matches already settled
+      mockFilter.mockResolvedValueOnce({
+        unsettled: [],
+        alreadySettled: [matchMeta],
+      });
+
+      await processSettlementBatch([matchMeta], context, testConfig);
+
+      // settleBatch should NOT have been called
+      expect(mockSettleBatch).not.toHaveBeenCalled();
+    });
+
+    it('should handle matches with individual field format in filter', async () => {
+      const mockFilter = filterAlreadySettledMatches as jest.MockedFunction<
+        typeof filterAlreadySettledMatches
+      >;
+
+      const match = createMatch();
+
+      // Add entry using individual fields (not JSON 'data' field)
+      const entryId = await redis.xadd(
+        context.stream,
+        '*',
+        'matchId', match.matchId,
+        'marketId', match.marketId,
+        'lendOrderId', match.lendOrderId,
+        'borrowOrderId', match.borrowOrderId,
+        'lenderWallet', match.lenderWallet,
+        'borrowerWallet', match.borrowerWallet,
+        'matchedAmount', match.matchedAmount,
+        'rate', String(match.rate),
+        'loanToken', match.loanToken,
+        'maturity', String(match.maturity),
+        'timestamp', String(match.timestamp),
+        'borrowerIsTaker', String(match.borrowerIsTaker),
+        'makerFeeAmount', match.makerFeeAmount,
+        'takerFeeAmount', match.takerFeeAmount,
+        'lenderSettlementFeeAmount', match.lenderSettlementFeeAmount,
+        'borrowerSettlementFeeAmount', match.borrowerSettlementFeeAmount,
+      );
+
+      if (!entryId) throw new Error('Failed to add entry');
+
+      const matchMeta = createMatchWithMeta(match, {
+        id: entryId,
+        stream: context.stream,
+      });
+
+      // Mock: this match is already settled
+      mockFilter.mockResolvedValueOnce({
+        unsettled: [],
+        alreadySettled: [matchMeta],
+      });
+
+      await processSettlementBatch([matchMeta], context, testConfig);
+
+      // Entry should be ACKed and deleted (stream is empty)
+      const length = await redis.xlen(context.stream);
+      expect(length).toBe(0);
+
+      // settleBatch should NOT have been called (all matches were already settled)
+      expect(mockSettleBatch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('XDEL chunking', () => {
+    it('should chunk xdel calls for 150+ entries', async () => {
+      const entryCount = 150;
+      const matches = createMatchBatch(entryCount);
+      const entryIds: string[] = [];
+
+      for (const match of matches) {
+        const entryId = await redis.xadd(
+          context.stream,
+          '*',
+          'data',
+          JSON.stringify(match),
+        );
+        if (entryId) {
+          entryIds.push(entryId);
+        }
+      }
+
+      const matchesWithMeta = matches.map((match, index) =>
+        createMatchWithMeta(match, {
+          id: entryIds[index],
+          stream: context.stream,
+        }),
+      );
+
+      const xdelSpy = jest.spyOn(redis, 'xdel');
+
+      await processSettlementBatch(matchesWithMeta, context, testConfig);
+
+      // 150 entries / 100 per batch = 2 xdel calls
+      expect(xdelSpy).toHaveBeenCalledTimes(2);
+
+      // All entries should be deleted
+      const length = await redis.xlen(context.stream);
+      expect(length).toBe(0);
+
+      xdelSpy.mockRestore();
+    }, 30000);
+
+    it('should call xdel once for entries at or under chunk size', async () => {
+      const entryCount = 50;
+      const matches = createMatchBatch(entryCount);
+      const entryIds: string[] = [];
+
+      for (const match of matches) {
+        const entryId = await redis.xadd(
+          context.stream,
+          '*',
+          'data',
+          JSON.stringify(match),
+        );
+        if (entryId) {
+          entryIds.push(entryId);
+        }
+      }
+
+      const matchesWithMeta = matches.map((match, index) =>
+        createMatchWithMeta(match, {
+          id: entryIds[index],
+          stream: context.stream,
+        }),
+      );
+
+      const xdelSpy = jest.spyOn(redis, 'xdel');
+
+      await processSettlementBatch(matchesWithMeta, context, testConfig);
+
+      // 50 entries < 100 chunk size = 1 xdel call
+      expect(xdelSpy).toHaveBeenCalledTimes(1);
+
+      // All entries should be deleted
+      const length = await redis.xlen(context.stream);
+      expect(length).toBe(0);
+
+      xdelSpy.mockRestore();
+    });
+  });
+
+  describe('error wrapping', () => {
+    it('should wrap settlement errors as BatchProcessingError', async () => {
+      const match = createMatch();
+      const entryId = await redis.xadd(context.stream, '*', 'data', JSON.stringify(match));
+      if (!entryId) throw new Error('Failed to add entry');
+
+      const matchMeta = createMatchWithMeta(match, { id: entryId, stream: context.stream });
+
+      // Make settleBatch throw a non-retryable error
+      const error = createSettlementError('Match already settled', 'ALREADY_SETTLED', false);
+      setupMockSettleBatchError(mockSettleBatch, error);
+
+      await expect(
+        processSettlementBatch([matchMeta], context, testConfig),
+      ).rejects.toThrow(BatchProcessingError);
+
+      try {
+        await processSettlementBatch([matchMeta], context, testConfig);
+      } catch (e) {
+        expect(e).toBeInstanceOf(BatchProcessingError);
+        expect((e as BatchProcessingError).retryable).toBe(false);
+      }
+    });
+
+    it('should wrap retryable settlement errors correctly', async () => {
+      const match = createMatch();
+      const entryId = await redis.xadd(context.stream, '*', 'data', JSON.stringify(match));
+      if (!entryId) throw new Error('Failed to add entry');
+
+      const matchMeta = createMatchWithMeta(match, { id: entryId, stream: context.stream });
+
+      const error = createSettlementError('Network error', 'NETWORK_ERROR', true);
+      setupMockSettleBatchError(mockSettleBatch, error);
+
+      try {
+        await processSettlementBatch([matchMeta], context, testConfig);
+        fail('Should have thrown');
+      } catch (e) {
+        expect(e).toBeInstanceOf(BatchProcessingError);
+        expect((e as BatchProcessingError).retryable).toBe(true);
+      }
+    });
+
+    it('should wrap database errors as BatchProcessingError', async () => {
+      const match = createMatch();
+      const entryId = await redis.xadd(context.stream, '*', 'data', JSON.stringify(match));
+      if (!entryId) throw new Error('Failed to add entry');
+
+      const matchMeta = createMatchWithMeta(match, { id: entryId, stream: context.stream });
+
+      // settleBatch succeeds, but database persistence fails
+      setupMockSettleBatch(mockSettleBatch);
+      mockPersistSettlementResults.mockRejectedValueOnce({
+        message: 'unique violation',
+        code: '23505',
+        retryable: false,
+      });
+
+      try {
+        await processSettlementBatch([matchMeta], context, testConfig);
+        fail('Should have thrown');
+      } catch (e) {
+        expect(e).toBeInstanceOf(BatchProcessingError);
+        expect((e as BatchProcessingError).retryable).toBe(false);
+      }
+    });
   });
 
   it('should log match details correctly', async () => {
