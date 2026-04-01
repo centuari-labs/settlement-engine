@@ -405,9 +405,9 @@ const persistLendPositionCreated = async (
     );
   }
 
-  const cbtAmount = Number(ev.cbtAmount);
-  const principal = Number(ev.principal);
-  const rate = Number(ev.rate);
+  const cbtAmount = ev.cbtAmount.toString();
+  const principal = ev.principal.toString();
+  const rate = ev.rate.toString();
 
   // Each settlement creates its own position row (no aggregation).
   // ON CONFLICT handles idempotency for re-processed settlement batches.
@@ -465,9 +465,9 @@ const persistBorrowPositionCreated = async (
     );
   }
 
-  const principal = Number(ev.principal);
-  const debt = Number(ev.debt);
-  const rate = Number(ev.rate);
+  const principal = ev.principal.toString();
+  const debt = ev.debt.toString();
+  const rate = ev.rate.toString();
 
   // Each settlement creates its own position row (no aggregation).
   // ON CONFLICT handles idempotency for re-processed settlement batches.
