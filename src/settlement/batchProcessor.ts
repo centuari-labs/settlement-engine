@@ -18,6 +18,7 @@ import {
   recordFailedMatches,
   restoreOrdersForFailedMatches,
 } from './database';
+import type { NonceManager } from './nonceManager';
 
 /**
  * Options for creating a batch processor.
@@ -39,6 +40,10 @@ export interface BatchProcessorOptions {
    * Optional handler for invalid entries.
    */
   readonly onInvalid?: ReadMatchesOptions['onInvalid'];
+  /**
+   * Nonce manager for explicit nonce sequencing.
+   */
+  readonly nonceManager?: NonceManager;
 }
 
 /**
@@ -84,6 +89,7 @@ export class BatchProcessor {
       stream: this.config.settlementMatchesStream,
       consumerGroup: this.config.consumerGroup,
       streamMaxLen: this.config.streamMaxLen,
+      nonceManager: options.nonceManager,
     };
   }
 

@@ -80,6 +80,21 @@ const configSchema = z.object({
     .transform((value) => Number(value || 1))
     .pipe(z.number().int().positive())
     .default('1'),
+  NONCE_LOCK_TTL_MS: z
+    .string()
+    .transform((value) => Number(value || 30000))
+    .pipe(z.number().int().positive())
+    .default('30000'),
+  TX_CONFIRMATION_TIMEOUT_MS: z
+    .string()
+    .transform((value) => Number(value || 120000))
+    .pipe(z.number().int().positive())
+    .default('120000'),
+  NONCE_LOCK_RETRY_DELAY_MS: z
+    .string()
+    .transform((value) => Number(value || 500))
+    .pipe(z.number().int().positive())
+    .default('500'),
 });
 
 export type AppConfig = {
@@ -101,6 +116,9 @@ export type AppConfig = {
   readonly ethereumRpcUrl: string;
   readonly settlementPrivateKey: string;
   readonly ethereumChainId: number;
+  readonly nonceLockTtlMs: number;
+  readonly txConfirmationTimeoutMs: number;
+  readonly nonceLockRetryDelayMs: number;
 };
 
 /**
@@ -128,6 +146,9 @@ export const loadConfig = (): AppConfig => {
     ethereumRpcUrl: parsed.ETHEREUM_RPC_URL,
     settlementPrivateKey: parsed.SETTLEMENT_PRIVATE_KEY,
     ethereumChainId: parsed.ETHEREUM_CHAIN_ID,
+    nonceLockTtlMs: parsed.NONCE_LOCK_TTL_MS,
+    txConfirmationTimeoutMs: parsed.TX_CONFIRMATION_TIMEOUT_MS,
+    nonceLockRetryDelayMs: parsed.NONCE_LOCK_RETRY_DELAY_MS,
   };
 };
 

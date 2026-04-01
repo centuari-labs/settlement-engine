@@ -7,6 +7,7 @@ import {
   type SettlementError,
 } from './smartContract';
 import { persistSettlementResults, type DatabaseError } from './database';
+import type { NonceManager } from './nonceManager';
 
 /**
  * Context for batch settlement processing that provides access to Redis and
@@ -29,6 +30,10 @@ export interface SettlementBatchContext {
    * Maximum number of entries to keep in the stream after trimming.
    */
   readonly streamMaxLen: number;
+  /**
+   * Nonce manager for explicit nonce sequencing across instances.
+   */
+  readonly nonceManager?: NonceManager;
 }
 
 /**
@@ -146,6 +151,7 @@ export const processSettlementBatch = async (
     settlementResult = await settleBatch({
       matches: unsettled.map((m) => m.payload),
       config,
+      nonceManager: context.nonceManager,
     });
     const duration = Date.now() - startTime;
 

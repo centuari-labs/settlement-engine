@@ -63,6 +63,9 @@ const createTestAppConfig = (overrides?: Partial<AppConfig>): AppConfig => ({
   settlementPrivateKey:
     'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
   ethereumChainId: 421614,
+  nonceLockTtlMs: 30000,
+  txConfirmationTimeoutMs: 120000,
+  nonceLockRetryDelayMs: 500,
   ...overrides,
 });
 

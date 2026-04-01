@@ -37,6 +37,9 @@ describe('loadConfig', () => {
     expect(config.failureBackoffBaseMs).toBe(1000);
     expect(config.failureBackoffMaxMs).toBe(60000);
     expect(config.ethereumChainId).toBe(1);
+    expect(config.nonceLockTtlMs).toBe(30000);
+    expect(config.txConfirmationTimeoutMs).toBe(120000);
+    expect(config.nonceLockRetryDelayMs).toBe(500);
   });
 
   it('should coerce numeric environment variables from strings', () => {

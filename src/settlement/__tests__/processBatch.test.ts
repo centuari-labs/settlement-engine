@@ -58,6 +58,14 @@ describe('processSettlementBatch', () => {
       settlementMatchesStream: testStream,
     });
     redis = getRedisClient(testConfig);
+
+    // Create consumer group for the test stream (MKSTREAM creates the stream if needed)
+    try {
+      await redis.xgroup('CREATE', testStream, testConfig.consumerGroup, '0', 'MKSTREAM');
+    } catch {
+      // Group may already exist from a previous failed cleanup
+    }
+
     context = {
       redis,
       stream: testStream,

@@ -20,6 +20,7 @@ import {
   LEND_POSITION_CREATED_EVENT,
   BORROW_POSITION_CREATED_EVENT,
 } from './eventAbis';
+import type { NonceManager } from './nonceManager';
 
 /**
  * Parsed BondTokenCreated event from settlement tx receipt.
@@ -136,6 +137,11 @@ export interface SettleBatchOptions {
    * Application configuration. If not provided, will be loaded from environment.
    */
   readonly config?: AppConfig;
+  /**
+   * Nonce manager for explicit nonce sequencing.
+   * When provided, acquires and manages nonces for each transaction.
+   */
+  readonly nonceManager?: NonceManager;
 }
 
 /**
@@ -380,6 +386,46 @@ const mapContractError = (
       message: 'Reentrancy guard triggered',
       code: 'REENTRANCY',
       retryable: true,
+      failedMatchIds: matchIds,
+    };
+  }
+
+  // Nonce-related errors
+  if (
+    errorMessage.includes('nonce too low') ||
+    errorMessage.includes('nonce has already been used')
+  ) {
+    return {
+      message: `Nonce too low: ${errorMessage}`,
+      code: 'NONCE_TOO_LOW',
+      retryable: true,
+      failedMatchIds: matchIds,
+    };
+  }
+
+  if (errorMessage.includes('replacement transaction underpriced')) {
+    return {
+      message: `Replacement underpriced: ${errorMessage}`,
+      code: 'REPLACEMENT_UNDERPRICED',
+      retryable: true,
+      failedMatchIds: matchIds,
+    };
+  }
+
+  if (errorMessage.includes('already known')) {
+    return {
+      message: `Transaction already known: ${errorMessage}`,
+      code: 'TX_ALREADY_KNOWN',
+      retryable: true,
+      failedMatchIds: matchIds,
+    };
+  }
+
+  if (errorMessage.includes('insufficient funds for gas')) {
+    return {
+      message: `Insufficient funds for gas: ${errorMessage}`,
+      code: 'INSUFFICIENT_GAS',
+      retryable: false,
       failedMatchIds: matchIds,
     };
   }
@@ -633,6 +679,7 @@ export const settleBatch = async (
     maxRetries = 3,
     retryDelayMs = 1000,
     config = loadConfig(),
+    nonceManager,
   } = options;
 
   if (matches.length === 0) {
@@ -666,6 +713,11 @@ export const settleBatch = async (
   );
 
   try {
+    // Acquire nonce if nonce manager is provided
+    const nonce = nonceManager
+      ? await nonceManager.acquireNonce()
+      : undefined;
+
     // Call the settleMatches function
     const chain = createChainFromId(config.ethereumChainId);
     const hash = await walletClient.writeContract({
@@ -675,10 +727,21 @@ export const settleBatch = async (
       args: [contractMatches],
       account,
       chain,
+      nonce,
     });
+
+    // Record pending tx for crash recovery
+    if (nonceManager) {
+      await nonceManager.confirmNonce(hash);
+    }
 
     // Wait for transaction receipt
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
+
+    // Tx confirmed on-chain — release nonce lock
+    if (nonceManager) {
+      await nonceManager.onTxConfirmed();
+    }
 
     if (!receipt.status || receipt.status === 'reverted') {
       const error: SettlementError = {
@@ -727,6 +790,11 @@ export const settleBatch = async (
       borrowPositionEvents,
     };
   } catch (error) {
+    // Handle nonce failure before mapping the error
+    if (nonceManager) {
+      await nonceManager.handleFailure(error);
+    }
+
     const settlementError = mapContractError(
       error,
       matches.map((m) => m.matchId),
