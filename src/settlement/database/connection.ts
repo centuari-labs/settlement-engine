@@ -10,6 +10,7 @@ import type {
 } from '../smartContract';
 import type { Match } from '../../schemas/match';
 import type { AppConfig } from '../../config';
+import { calculateBackoffDelay } from '../helpers';
 
 /**
  * Error information for failed database operations.
@@ -225,7 +226,7 @@ export const executeWithRetry = async <T>(
   retryDelayMs: number,
 ): Promise<T> => {
   let attempt = 0;
-  let delay = retryDelayMs;
+  const maxDelayMs = retryDelayMs * Math.pow(2, maxRetries);
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -260,8 +261,8 @@ export const executeWithRetry = async <T>(
         'Retryable error during persistence',
       );
 
+      const delay = calculateBackoffDelay(attempt + 1, retryDelayMs, maxDelayMs);
       await new Promise((resolve) => setTimeout(resolve, delay));
-      delay *= 2;
       attempt += 1;
     }
   }

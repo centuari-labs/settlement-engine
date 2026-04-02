@@ -19,6 +19,7 @@ import {
   restoreOrdersForFailedMatches,
 } from './database';
 import type { NonceManager } from './nonceManager';
+import { calculateBackoffDelay } from './helpers';
 import { logger } from '../logger';
 
 /**
@@ -373,8 +374,9 @@ export class BatchProcessor {
       }
 
       this.consecutiveFailures += 1;
-      const delay = Math.min(
-        this.config.failureBackoffBaseMs * Math.pow(2, this.consecutiveFailures - 1),
+      const delay = calculateBackoffDelay(
+        this.consecutiveFailures,
+        this.config.failureBackoffBaseMs,
         this.config.failureBackoffMaxMs,
       );
       this.nextRetryAt = Date.now() + delay;

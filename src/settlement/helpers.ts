@@ -1,5 +1,9 @@
 import crypto from 'crypto';
 
+export function calculateBackoffDelay(attempt: number, baseMs: number, maxMs: number): number {
+  return Math.min(baseMs * Math.pow(2, attempt - 1), maxMs);
+}
+
 /**
  * Converts a bytes32 hex string (e.g. from blockchain events) to a valid UUID format.
  * Takes the first 32 hex chars and formats as xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.

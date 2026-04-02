@@ -1,4 +1,4 @@
-import { bytes32ToUuid, positionUuidFor, cbtAssetUuidFor } from '../helpers';
+import { bytes32ToUuid, positionUuidFor, cbtAssetUuidFor, calculateBackoffDelay } from '../helpers';
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -98,5 +98,33 @@ describe('cbtAssetUuidFor', () => {
   it('should return a valid UUID format', () => {
     const result = cbtAssetUuidFor('some-market', '0xbond');
     expect(result).toMatch(UUID_REGEX);
+  });
+});
+
+describe('calculateBackoffDelay', () => {
+  it('should return baseMs for attempt 1', () => {
+    expect(calculateBackoffDelay(1, 1000, 30000)).toBe(1000);
+  });
+
+  it('should double for attempt 2', () => {
+    expect(calculateBackoffDelay(2, 1000, 30000)).toBe(2000);
+  });
+
+  it('should quadruple for attempt 3', () => {
+    expect(calculateBackoffDelay(3, 1000, 30000)).toBe(4000);
+  });
+
+  it('should cap at maxMs', () => {
+    expect(calculateBackoffDelay(10, 1000, 5000)).toBe(5000);
+  });
+
+  it('should return maxMs when calculated delay equals maxMs', () => {
+    expect(calculateBackoffDelay(4, 1000, 8000)).toBe(8000);
+  });
+
+  it('should handle different base values', () => {
+    expect(calculateBackoffDelay(1, 500, 10000)).toBe(500);
+    expect(calculateBackoffDelay(2, 500, 10000)).toBe(1000);
+    expect(calculateBackoffDelay(3, 500, 10000)).toBe(2000);
   });
 });
