@@ -22,19 +22,26 @@ npm run test:coverage      # with coverage report
 src/
 ├── index.ts                          # Entry point: startup, shutdown, consumer group init
 ├── config.ts                         # Zod-validated config (17 env vars with defaults)
+├── logger.ts                         # Structured pino logger
 ├── schemas/
 │   └── match.ts                      # Match Zod schema + Redis stream constants
 ├── redis/
 │   ├── client.ts                     # Singleton Redis client
 │   └── settlementMatchConsumer.ts    # Stream reading, entry parsing, pending recovery
 ├── settlement/
+│   ├── abi.ts                        # Settlement contract ABI definition
 │   ├── batchAccumulator.ts           # Hybrid batching (size + time triggers)
-│   ├── batchProcessor.ts            # Main polling loop with backoff
-│   ├── processBatch.ts              # Orchestrates: filter → settle → persist → ack
-│   ├── smartContract.ts             # Viem clients, multicall, error mapping, event parsing
-│   ├── database.ts                  # PostgreSQL operations with retry logic
-│   ├── helpers.ts                   # UUID ↔ bytes32 conversion, hash-based IDs
-│   └── eventAbis.ts                 # Contract event definitions
+│   ├── batchProcessor.ts             # Main polling loop with backoff
+│   ├── processBatch.ts               # Orchestrates: filter → settle → persist → ack
+│   ├── smartContract.ts              # Viem clients, multicall, error mapping, event parsing
+│   ├── nonceManager.ts               # Transaction nonce management
+│   ├── database/
+│   │   ├── index.ts                  # Re-exports
+│   │   ├── connection.ts             # Pool, transactions, retry, error classification
+│   │   ├── persistence.ts            # Phase 1 + Phase 2 persistence
+│   │   └── recovery.ts               # Event recovery and reprocessing
+│   ├── helpers.ts                    # UUID ↔ bytes32 conversion, hash-based IDs, backoff utility
+│   └── eventAbis.ts                  # Contract event definitions
 └── tests/
     ├── setup.ts                     # Global test setup
     └── helpers/                     # Test config, fixtures, Redis/DB/contract mocks
@@ -87,6 +94,9 @@ Backpressure: `maxCapacity = batchSize * 5`. Deduplication via `seenIds` Set.
 8. **Graceful shutdown** — handle SIGTERM/SIGINT. Stop polling, finish current batch, close connections.
 9. **Pending entry recovery** — on startup, reclaim pending entries from dead consumers via XCLAIM. Run reclaim on a separate timer during runtime.
 10. **No floating promises** — every async operation must be awaited or explicitly fire-and-forget with error logging.
+11. **File size limit** — source files should be <500 lines. Split larger files into focused modules.
+12. **Layer separation** — database layer must not make RPC/blockchain calls. Smart contract interactions belong in `smartContract.ts`.
+13. **Structured logging** — use the logger from `src/logger.ts`, not raw `console.log/warn/error`.
 
 ### Database Patterns
 
@@ -109,6 +119,8 @@ Backpressure: `maxCapacity = batchSize * 5`. Deduplication via `seenIds` Set.
 - Use `waitForCondition()` for async assertions — never fixed `setTimeout` delays
 - Test factories: `createMatch()`, `createMatchBatch()`, `createTestConfig()`
 - Cleanup all test streams in `afterEach`
+- Coverage threshold: 80% minimum enforced in jest.config.js (branches at 70% due to hard-to-exercise error paths)
+- All recovery code paths (XCLAIM, event recovery) must have dedicated tests
 
 ### Formatting
 
