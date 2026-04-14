@@ -45,6 +45,9 @@ jobs:
     needs: detect-env
     runs-on: [self-hosted, centuari-runner]
     timeout-minutes: 15
+    env:
+      REDIS_URL: redis://127.0.0.1:6379
+      REDIS_TEST_URL: redis://127.0.0.1:6379
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +59,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Flush Redis (clean state)
+        run: docker exec ci-redis redis-cli FLUSHALL
 
       - name: Unit tests
         run: npm run test:unit
@@ -87,6 +93,11 @@ jobs:
             -t ${{ env.IMAGE_NAME }}:${{ github.sha }} \
             -t ${{ env.IMAGE_NAME }}:latest \
             .
+
+      - name: Cleanup any leftover SSH tunnel
+        run: |
+          pkill -f "ssh.*-L 5000:127.0.0.1:5000" || true
+          sleep 1
 
       - name: Open SSH tunnel to registry
         run: |
