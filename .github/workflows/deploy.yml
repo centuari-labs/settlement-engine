@@ -1,0 +1,135 @@
+name: Build & Deploy settlement-engine
+
+on:
+  push:
+    branches: [development, staging, main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-settlement-engine-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-env:
+    runs-on: [self-hosted, centuari-runner]
+    outputs:
+      env: ${{ steps.set.outputs.env }}
+      namespace: ${{ steps.set.outputs.namespace }}
+      compose_cmd: ${{ steps.set.outputs.compose_cmd }}
+    steps:
+      - id: set
+        run: |
+          case "${{ github.ref_name }}" in
+            development)
+              echo "env=dev" >> $GITHUB_OUTPUT
+              echo "namespace=centuari-dev" >> $GITHUB_OUTPUT
+              echo "compose_cmd=docker compose -f compose.dev.yml -p centuari-dev" >> $GITHUB_OUTPUT
+              ;;
+            staging)
+              echo "env=staging" >> $GITHUB_OUTPUT
+              echo "namespace=centuari-staging" >> $GITHUB_OUTPUT
+              echo "compose_cmd=docker compose -f compose.staging.yml -p centuari-staging" >> $GITHUB_OUTPUT
+              ;;
+            main)
+              echo "env=prod" >> $GITHUB_OUTPUT
+              echo "namespace=centuari" >> $GITHUB_OUTPUT
+              echo "compose_cmd=docker compose -f compose.prod.yml" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "Unknown branch ${{ github.ref_name }}" >&2
+              exit 1
+              ;;
+          esac
+
+  test:
+    needs: detect-env
+    runs-on: [self-hosted, centuari-runner]
+    timeout-minutes: 15
+    env:
+      REDIS_URL: redis://127.0.0.1:6379
+      REDIS_TEST_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Flush Redis (clean state)
+        run: docker exec ci-redis redis-cli FLUSHALL
+
+      - name: Unit tests
+        run: npm run test:unit
+
+  build-and-deploy:
+    needs: [detect-env, test]
+    runs-on: [self-hosted, centuari-runner]
+    timeout-minutes: 20
+    environment: ${{ needs.detect-env.outputs.env }}
+    env:
+      NAMESPACE: ${{ needs.detect-env.outputs.namespace }}
+      IMAGE_NAME: ${{ needs.detect-env.outputs.namespace }}/settlement-engine
+      REGISTRY: localhost:5000
+      COMPOSE_CMD: ${{ needs.detect-env.outputs.compose_cmd }}
+      SERVICE_NAME: settlement-engine${{ needs.detect-env.outputs.env == 'prod' && '' || format('-{0}', needs.detect-env.outputs.env) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p ${{ secrets.VPS_PORT || 22 }} ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            -t ${{ env.IMAGE_NAME }}:latest \
+            .
+
+      - name: Cleanup any leftover SSH tunnel
+        run: |
+          pkill -f "ssh.*-L 5000:127.0.0.1:5000" || true
+          sleep 1
+
+      - name: Open SSH tunnel to registry
+        run: |
+          ssh -f -N -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT || 22 }} \
+            -o ExitOnForwardFailure=yes \
+            -L 5000:127.0.0.1:5000 \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
+          sleep 2
+          curl -sf http://localhost:5000/v2/ > /dev/null
+
+      - name: Tag & push to registry
+        run: |
+          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker tag ${{ env.IMAGE_NAME }}:latest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Close SSH tunnel
+        if: always()
+        run: pkill -f "ssh.*-L 5000:127.0.0.1:5000" || true
+
+      - name: Deploy to VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT || 22 }} \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            "cd ~/centuari && \
+             ${{ env.COMPOSE_CMD }} pull ${{ env.SERVICE_NAME }} && \
+             ${{ env.COMPOSE_CMD }} up -d --no-deps ${{ env.SERVICE_NAME }} && \
+             docker image prune -f"
+
+      - name: Cleanup local images
+        if: always()
+        run: |
+          docker image rm ${{ env.IMAGE_NAME }}:${{ github.sha }} || true
+          docker image rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} || true
