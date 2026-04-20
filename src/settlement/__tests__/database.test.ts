@@ -83,6 +83,7 @@ describe('database', () => {
 
     const createMinimalResult = (): SettlementResult => ({
       transactionHash: '0xabc123',
+      blockHash: '0xdef456',
       blockNumber: 100,
       gasUsed: 50000,
       timestamp: 1700000000000,
@@ -271,6 +272,7 @@ describe('database', () => {
     it('should insert settlement_batches and settlement_items', async () => {
       const result: SettlementResult = {
         transactionHash: '0xabc',
+        blockHash: '0xdef',
         blockNumber: 100,
         gasUsed: 50000,
         timestamp: 1700000000000,
@@ -307,6 +309,7 @@ describe('database', () => {
     it('should not rethrow Phase 2 failures', async () => {
       const result: SettlementResult = {
         transactionHash: '0xabc',
+        blockHash: '0xdef',
         blockNumber: 100,
         gasUsed: 50000,
         timestamp: 1700000000000,
@@ -319,6 +322,7 @@ describe('database', () => {
             maturity: 1735689600n,
             name: 'Bond',
             symbol: 'BT',
+            logIndex: 0,
           },
         ],
         lendPositionEvents: [],
@@ -594,6 +598,7 @@ describe('database', () => {
 
     const createMinimalResult = (): SettlementResult => ({
       transactionHash: '0xabc123',
+      blockHash: '0xdef456',
       blockNumber: 100,
       gasUsed: 50000,
       timestamp: 1700000000000,
@@ -780,6 +785,7 @@ describe('database', () => {
 
     const createMinimalResult = (): SettlementResult => ({
       transactionHash: '0xabc123',
+      blockHash: '0xdef456',
       blockNumber: 100,
       gasUsed: 50000,
       timestamp: 1700000000000,
@@ -908,6 +914,7 @@ describe('database', () => {
 
       const result: SettlementResult = {
         transactionHash: '0xabc123',
+        blockHash: '0xdef456',
         blockNumber: 100,
         gasUsed: 50000,
         timestamp: 1700000000000,
@@ -920,6 +927,7 @@ describe('database', () => {
             maturity: 1735689600n,
             name: 'Bond',
             symbol: 'BT',
+            logIndex: 0,
           },
         ],
         lendPositionEvents: [
@@ -930,6 +938,7 @@ describe('database', () => {
             cbtAmount: 1000000n,
             principal: 1000000n,
             rate: 5000n,
+            logIndex: 1,
           },
         ],
         borrowPositionEvents: [
@@ -939,6 +948,7 @@ describe('database', () => {
             principal: 1000000n,
             debt: 1050000n,
             rate: 5000n,
+            logIndex: 2,
           },
         ],
       };
@@ -1018,6 +1028,7 @@ describe('database', () => {
 
       const result: SettlementResult = {
         transactionHash: '0xabc123',
+        blockHash: '0xdef456',
         blockNumber: 100,
         gasUsed: 50000,
         timestamp: 1700000000000,
@@ -1071,6 +1082,7 @@ describe('database', () => {
 
       const result: SettlementResult = {
         transactionHash: '0xabc123',
+        blockHash: '0xdef456',
         blockNumber: 100,
         gasUsed: 50000,
         timestamp: 1700000000000,
@@ -1083,6 +1095,7 @@ describe('database', () => {
             maturity: 1735689600n,
             name: 'Bond',
             symbol: 'BT',
+            logIndex: 0,
           },
         ],
         lendPositionEvents: [],
@@ -1132,6 +1145,7 @@ describe('database', () => {
 
     const createResultWithEvents = (matchId: string): SettlementResult => ({
       transactionHash: '0xabc123',
+      blockHash: '0xdef456',
       blockNumber: 100,
       gasUsed: 50000,
       timestamp: 1700000000000,

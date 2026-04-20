@@ -34,6 +34,7 @@ export interface ParsedBondToken {
   readonly maturity: bigint;
   readonly name: string;
   readonly symbol: string;
+  readonly logIndex: number;
 }
 
 /**
@@ -46,6 +47,7 @@ export interface ParsedLendPosition {
   readonly cbtAmount: bigint;
   readonly principal: bigint;
   readonly rate: bigint;
+  readonly logIndex: number;
 }
 
 /**
@@ -57,6 +59,7 @@ export interface ParsedBorrowPosition {
   readonly principal: bigint;
   readonly debt: bigint;
   readonly rate: bigint;
+  readonly logIndex: number;
 }
 
 /**
@@ -67,6 +70,12 @@ export interface SettlementResult {
    * Transaction hash of the settlement transaction.
    */
   readonly transactionHash: string;
+  /**
+   * Block hash of the block where the transaction was mined. Used as part of
+   * the idempotency stamp written alongside eager DB mutations via
+   * applyOnChainEffect.
+   */
+  readonly blockHash: Hash;
   /**
    * Block number where the transaction was mined.
    */
@@ -463,7 +472,13 @@ const getWalletClient = (config: AppConfig) => {
  * Parse settlement transaction receipt logs to extract BondTokenCreated,
  * LendPositionCreated, and BorrowPositionCreated events.
  */
-const parseReceiptLogs = (logs: readonly { topics: readonly `0x${string}`[]; data: `0x${string}` }[]): {
+type ReceiptLog = {
+  readonly topics: readonly `0x${string}`[];
+  readonly data: `0x${string}`;
+  readonly logIndex: number | null;
+};
+
+const parseReceiptLogs = (logs: readonly ReceiptLog[]): {
   bondTokenEvents: ParsedBondToken[];
   lendPositionEvents: ParsedLendPosition[];
   borrowPositionEvents: ParsedBorrowPosition[];
@@ -473,6 +488,14 @@ const parseReceiptLogs = (logs: readonly { topics: readonly `0x${string}`[]; dat
   const borrowPositionEvents: ParsedBorrowPosition[] = [];
 
   for (const log of logs) {
+    // logIndex is null on pending logs; settlement logs come from mined
+    // receipts, so this is defensive — skip unidentifiable logs rather than
+    // stamping a row with a null index.
+    if (log.logIndex === null) {
+      continue;
+    }
+    const logIndex = log.logIndex;
+
     try {
       const decoded = decodeEventLog({
         abi: [BOND_TOKEN_CREATED_EVENT],
@@ -487,6 +510,7 @@ const parseReceiptLogs = (logs: readonly { topics: readonly `0x${string}`[]; dat
           maturity: decoded.args.maturity,
           name: decoded.args.name,
           symbol: decoded.args.symbol,
+          logIndex,
         });
       }
     } catch {
@@ -507,6 +531,7 @@ const parseReceiptLogs = (logs: readonly { topics: readonly `0x${string}`[]; dat
           cbtAmount: decoded.args.cbtAmount,
           principal: decoded.args.principal,
           rate: decoded.args.rate,
+          logIndex,
         });
       }
     } catch {
@@ -526,6 +551,7 @@ const parseReceiptLogs = (logs: readonly { topics: readonly `0x${string}`[]; dat
           principal: decoded.args.principal,
           debt: decoded.args.debt,
           rate: decoded.args.rate,
+          logIndex,
         });
       }
     } catch {
@@ -718,6 +744,7 @@ export const settleBatch = async (
 
     return {
       transactionHash: receipt.transactionHash,
+      blockHash: receipt.blockHash,
       blockNumber,
       gasUsed,
       timestamp,

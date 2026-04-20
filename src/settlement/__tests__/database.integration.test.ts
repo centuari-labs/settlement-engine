@@ -118,6 +118,7 @@ describe('persistSettlementResults Integration Tests', () => {
 
       const settlementResult: SettlementResult = {
         transactionHash: txHash,
+        blockHash: '0xdef' as `0x${string}`,
         blockNumber: 1,
         gasUsed: 1000,
         timestamp: Date.now(),

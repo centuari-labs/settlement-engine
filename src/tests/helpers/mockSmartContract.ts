@@ -10,8 +10,13 @@ import type { Match } from '../../schemas/match';
 const createSuccessfulSettlementResult = (
   options: SettleBatchOptions,
 ): SettlementResult => {
+  const randomHex = (len: number): `0x${string}` =>
+    `0x${Array.from({ length: len }, () =>
+      Math.floor(Math.random() * 16).toString(16),
+    ).join('')}` as `0x${string}`;
   return {
-    transactionHash: `0x${Math.random().toString(16).substring(2, 66)}`,
+    transactionHash: randomHex(64),
+    blockHash: randomHex(64),
     blockNumber: Math.floor(Math.random() * 1000000),
     gasUsed: options.matches.length * 50000,
     timestamp: Date.now(),
