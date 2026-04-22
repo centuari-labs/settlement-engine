@@ -2,14 +2,6 @@ import type { Pool, PoolClient } from 'pg';
 import { logger } from '../../logger';
 import { Pool as PgPool } from 'pg';
 import { z } from 'zod';
-import type {
-  SettlementResult,
-  ParsedBondToken,
-  ParsedLendPosition,
-  ParsedBorrowPosition,
-} from '../smartContract';
-import type { Match } from '../../schemas/match';
-import type { AppConfig } from '../../config';
 import { calculateBackoffDelay } from '../helpers';
 
 /**
@@ -28,72 +20,6 @@ export interface DatabaseError {
    * Whether the error is retryable (transient).
    */
   readonly retryable: boolean;
-}
-
-/**
- * Options for persisting settlement results to the database.
- */
-export interface PersistSettlementResultsOptions {
-  /**
-   * Array of settlement results to persist.
-   */
-  readonly results: readonly SettlementResult[];
-  /**
-   * Map of matchId → Match payload for upserting match rows before settlement items.
-   * This ensures the foreign key constraint on settlement_items is satisfied
-   * even if the DB writer hasn't persisted the match yet.
-   */
-  readonly matchPayloads: ReadonlyMap<string, Match>;
-  /**
-   * App configuration (needed for on-chain ERC20 metadata reads).
-   */
-  readonly config: AppConfig;
-  /**
-   * Maximum number of retries for transient errors.
-   */
-  readonly maxRetries?: number;
-  /**
-   * Initial retry delay in milliseconds (exponential backoff).
-   */
-  readonly retryDelayMs?: number;
-}
-
-/**
- * Allowed settlement batch statuses.
- *
- * We only persist completed or failed batches because the smart contract
- * settlement call waits until the transaction is mined before we write to
- * the database.
- */
-export const settlementBatchStatusSchema = z.enum(['COMPLETED', 'FAILED']);
-
-export type SettlementBatchStatus = z.infer<typeof settlementBatchStatusSchema>;
-
-/**
- * Minimal shape of a settlement batch record.
- */
-export interface SettlementBatch {
-  readonly id: string;
-  readonly txHash: string;
-  readonly status: SettlementBatchStatus;
-}
-
-/**
- * Minimal shape of a settlement item record.
- */
-export interface SettlementItem {
-  readonly id: string;
-  readonly settlementBatchId: string;
-  readonly matchId: string;
-}
-
-/**
- * Raw events stored alongside settlement batch for recovery.
- */
-export interface RawSettlementEvents {
-  readonly bondTokenEvents: readonly ParsedBondToken[];
-  readonly lendPositionEvents: readonly ParsedLendPosition[];
-  readonly borrowPositionEvents: readonly ParsedBorrowPosition[];
 }
 
 /**

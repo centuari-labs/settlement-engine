@@ -7,7 +7,7 @@ import {
   filterAlreadySettledMatches,
   type SettlementError,
 } from './smartContract';
-import { persistSettlementResults, type DatabaseError } from './database';
+import { applySettlementResult, getPool, type DatabaseError } from './database';
 import type { NonceManager } from './nonceManager';
 
 /**
@@ -195,33 +195,21 @@ export const processSettlementBatch = async (
     );
   }
 
-  // Step 2: Persist settlement results to database (two-phase).
-  // Phase 1 inserts settlement records + raw events (must succeed).
-  // Phase 2 processes events into positions (can fail — recovery loop retries).
-  // Build a map of matchId → Match payload so the persistence layer can
-  // upsert match rows before inserting settlement_items (avoids FK race
-  // condition with the DB writer).
-  const matchPayloads = new Map(
-    unsettled.map((m) => [m.payload.matchId, m.payload]),
-  );
-
+  // Step 2: Eager-write the parsed events to indexer-v3's schema. Each event
+  // is committed in its own pg tx with applied_by_* stamps. If this fails
+  // mid-batch the on-chain tx is already final, so we don't ACK Redis —
+  // retry will no-op the already-stamped rows via their stamps, and the
+  // indexer-v3 tail is a secondary safety net for any gaps we leave behind.
   try {
     const startTime = Date.now();
-    await persistSettlementResults({
-      results: [settlementResult],
-      matchPayloads,
-      config: config!,
-    });
+    await applySettlementResult(getPool(), settlementResult);
     const duration = Date.now() - startTime;
 
     logger.info(
       { component: 'process-settlement-batch', duration, matchCount: unsettled.length },
-      'Database persistence successful',
+      'Applied settlement result to indexer-v3 schema',
     );
   } catch (error) {
-    // Phase 1 failed — settlement records not committed.
-    // This is critical: on-chain settlement succeeded but we can't persist the record.
-    // Do NOT ACK from Redis so the entries can be retried.
     const dbError = error as DatabaseError;
     const isRetryable =
       dbError.retryable !== undefined ? dbError.retryable : true;
@@ -229,16 +217,16 @@ export const processSettlementBatch = async (
     logger.error(
       {
         component: 'process-settlement-batch',
-        err: dbError.message,
+        err: dbError.message ?? (error as Error).message,
         code: dbError.code,
         retryable: isRetryable,
         matchCount: unsettled.length,
       },
-      'Database persistence Phase 1 failed',
+      'Settlement apply to indexer-v3 schema failed',
     );
 
     throw new BatchProcessingError(
-      `Database persistence failed: ${dbError.message}`,
+      `Settlement apply failed: ${dbError.message ?? (error as Error).message}`,
       isRetryable,
       error,
     );

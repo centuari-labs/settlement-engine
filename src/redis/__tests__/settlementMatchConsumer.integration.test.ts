@@ -10,15 +10,15 @@ import {
   removePendingMessages,
 } from '../../tests/helpers/redisTestClient';
 import { createTestConfig } from '../../tests/helpers/testConfig';
-import { persistSettlementResults } from '../../settlement/database';
+import { applySettlementResult } from '../../settlement/database';
 import { setupMockSettleBatch, getMockSettleBatch } from '../../tests/helpers/mockSmartContract';
 
 // Mock database to avoid random failures
 jest.mock('../../settlement/database');
 
 const mockSettleBatch = getMockSettleBatch();
-const mockPersistSettlementResults = persistSettlementResults as jest.MockedFunction<
-  typeof persistSettlementResults
+const mockApplySettlementResult = applySettlementResult as jest.MockedFunction<
+  typeof applySettlementResult
 >;
 
 /**
@@ -100,7 +100,7 @@ describe('settlementMatchConsumer Integration Tests', () => {
 
     // Set up default successful mocks using the mock helper
     setupMockSettleBatch(mockSettleBatch);
-    mockPersistSettlementResults.mockResolvedValue(undefined);
+    mockApplySettlementResult.mockResolvedValue(undefined);
   }, 30000);
 
   afterEach(async () => {
