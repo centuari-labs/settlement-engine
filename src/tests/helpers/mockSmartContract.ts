@@ -1,3 +1,4 @@
+import type { TransactionReceipt } from 'viem';
 import type { SettlementResult, SettlementError, SettleBatchOptions } from '../../settlement/smartContract';
 import type { Match } from '../../schemas/match';
 
@@ -14,16 +15,36 @@ const createSuccessfulSettlementResult = (
     `0x${Array.from({ length: len }, () =>
       Math.floor(Math.random() * 16).toString(16),
     ).join('')}` as `0x${string}`;
+  const transactionHash = randomHex(64);
+  const blockHash = randomHex(64);
+  const blockNumber = Math.floor(Math.random() * 1000000);
+  const receipt = {
+    transactionHash,
+    blockHash,
+    blockNumber: BigInt(blockNumber),
+    status: 'success',
+    logs: [],
+    gasUsed: BigInt(options.matches.length * 50000),
+    cumulativeGasUsed: BigInt(options.matches.length * 50000),
+    effectiveGasPrice: 1n,
+    from: '0x0000000000000000000000000000000000000000',
+    to: '0x0000000000000000000000000000000000000000',
+    contractAddress: null,
+    transactionIndex: 0,
+    type: 'eip1559',
+    logsBloom: '0x',
+  } as unknown as TransactionReceipt;
   return {
-    transactionHash: randomHex(64),
-    blockHash: randomHex(64),
-    blockNumber: Math.floor(Math.random() * 1000000),
+    transactionHash,
+    blockHash,
+    blockNumber,
     gasUsed: options.matches.length * 50000,
     timestamp: Date.now(),
     settledMatchIds: options.matches.map((m) => m.matchId),
     bondTokenEvents: [],
     lendPositionEvents: [],
     borrowPositionEvents: [],
+    receipt,
   };
 };
 

@@ -6,6 +6,14 @@
 // Load environment variables from .env file for tests
 import 'dotenv/config';
 
+// The shared @centuari-labs/on-chain-effects package is published as ESM,
+// which CJS ts-jest cannot load directly. Mock it globally so every suite
+// gets a callable no-op; individual suites can override via jest.mock() of
+// the same module id.
+jest.mock('@centuari-labs/on-chain-effects', () => ({
+  applyOnChainEffect: jest.fn(async () => ({ applied: true })),
+}));
+
 // Automatically mock smart contract module for all tests
 // This ensures unit and integration tests don't make real blockchain calls
 jest.mock('../settlement/smartContract');

@@ -10,6 +10,8 @@ import {
   type Chain,
   defineChain,
   decodeEventLog,
+  type PublicClient,
+  type TransactionReceipt,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { loadConfig, type AppConfig } from '../config';
@@ -104,6 +106,13 @@ export interface SettlementResult {
    * Parsed BorrowPositionCreated events from the settlement tx receipt.
    */
   readonly borrowPositionEvents: readonly ParsedBorrowPosition[];
+  /**
+   * Raw mined transaction receipt. Held here so downstream DB writers (via
+   * `applyOnChainEffect`) don't re-fetch it per event — settlement batches
+   * can emit N+M+K logs, and re-running `waitForTransactionReceipt` for each
+   * would be wasteful.
+   */
+  readonly receipt: TransactionReceipt;
 }
 
 /**
@@ -752,6 +761,7 @@ export const settleBatch = async (
       bondTokenEvents,
       lendPositionEvents,
       borrowPositionEvents,
+      receipt,
     };
   } catch (error) {
     // Handle nonce failure before mapping the error

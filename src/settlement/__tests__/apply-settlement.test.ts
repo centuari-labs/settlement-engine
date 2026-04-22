@@ -1,46 +1,45 @@
-import type { Pool, PoolClient, QueryResult } from 'pg';
+import type { Pool, PoolClient } from 'pg';
+import type { PublicClient, TransactionReceipt } from 'viem';
 import type {
   ParsedBorrowPosition,
   ParsedLendPosition,
   SettlementResult,
 } from '../smartContract';
+
+jest.mock('@centuari-labs/on-chain-effects', () => {
+  return {
+    applyOnChainEffect: jest.fn(async () => ({ applied: true })),
+  };
+});
+
+import { applyOnChainEffect } from '@centuari-labs/on-chain-effects';
 import { applySettlementResult } from '../database/apply-settlement';
 
-type QueryFn = jest.Mock<Promise<QueryResult<{ count: string }>>, [string, unknown[]?]>;
+const mockedApply = applyOnChainEffect as jest.MockedFunction<
+  typeof applyOnChainEffect
+>;
 
-const mockClient = (): { client: PoolClient; query: QueryFn; release: jest.Mock } => {
-  const query: QueryFn = jest.fn(async (sql: string) => {
-    // Default: alreadyStamped returns no rows (i.e. not already stamped),
-    // INSERT/UPDATE succeed, BEGIN/COMMIT/ROLLBACK are no-ops.
-    if (/^SELECT count\(\*\)/i.test(sql.trim())) {
-      return {
-        rows: [{ count: '0' }],
-        rowCount: 1,
-        command: 'SELECT',
-        oid: 0,
-        fields: [],
-      } as unknown as QueryResult;
-    }
-    return {
-      rows: [],
-      rowCount: 0,
-      command: 'INSERT',
-      oid: 0,
-      fields: [],
-    } as unknown as QueryResult;
-  });
-  const release = jest.fn();
-  return {
-    client: { query, release } as unknown as PoolClient,
-    query,
-    release,
-  };
-};
+const TX_HASH =
+  '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as const;
+const BLOCK_HASH =
+  '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' as const;
 
-const mockPool = (connectImpl: () => PoolClient): Pool =>
-  ({ connect: jest.fn(async () => connectImpl()) } as unknown as Pool);
+const fakeReceipt = (): TransactionReceipt =>
+  ({
+    transactionHash: TX_HASH,
+    blockHash: BLOCK_HASH,
+    blockNumber: 100n,
+    status: 'success',
+    logs: [],
+  }) as unknown as TransactionReceipt;
 
-const lendEvent = (overrides: Partial<ParsedLendPosition> = {}): ParsedLendPosition => ({
+const fakeClient = (): PublicClient => ({}) as unknown as PublicClient;
+
+const fakePool = (): Pool => ({}) as unknown as Pool;
+
+const lendEvent = (
+  overrides: Partial<ParsedLendPosition> = {},
+): ParsedLendPosition => ({
   marketId:
     '0x1111111111111111111111111111111111111111111111111111111111111111',
   lender: '0x2222222222222222222222222222222222222222',
@@ -52,7 +51,9 @@ const lendEvent = (overrides: Partial<ParsedLendPosition> = {}): ParsedLendPosit
   ...overrides,
 });
 
-const borrowEvent = (overrides: Partial<ParsedBorrowPosition> = {}): ParsedBorrowPosition => ({
+const borrowEvent = (
+  overrides: Partial<ParsedBorrowPosition> = {},
+): ParsedBorrowPosition => ({
   marketId:
     '0x1111111111111111111111111111111111111111111111111111111111111111',
   borrower: '0x4444444444444444444444444444444444444444',
@@ -63,11 +64,11 @@ const borrowEvent = (overrides: Partial<ParsedBorrowPosition> = {}): ParsedBorro
   ...overrides,
 });
 
-const settlementResult = (overrides: Partial<SettlementResult> = {}): SettlementResult => ({
-  transactionHash:
-    '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-  blockHash:
-    '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+const settlementResult = (
+  overrides: Partial<SettlementResult> = {},
+): SettlementResult => ({
+  transactionHash: TX_HASH,
+  blockHash: BLOCK_HASH,
   blockNumber: 100,
   gasUsed: 500_000,
   timestamp: Date.now(),
@@ -75,160 +76,199 @@ const settlementResult = (overrides: Partial<SettlementResult> = {}): Settlement
   bondTokenEvents: [],
   lendPositionEvents: [lendEvent()],
   borrowPositionEvents: [borrowEvent()],
+  receipt: fakeReceipt(),
   ...overrides,
 });
 
 describe('applySettlementResult', () => {
-  it('applies a lend + borrow event pair with stamp columns on both inserts', async () => {
-    const lendClient = mockClient();
-    const borrowClient = mockClient();
-    const connects: PoolClient[] = [lendClient.client, borrowClient.client];
-    const pool = mockPool(() => {
-      const next = connects.shift();
-      if (!next) throw new Error('unexpected extra connect');
-      return next;
-    });
-
-    await applySettlementResult(pool, settlementResult());
-
-    // Lend: BEGIN, alreadyStamped SELECT, INSERT, COMMIT
-    expect(lendClient.query.mock.calls.map((c) => c[0].split(/\s+/u)[0])).toEqual([
-      'BEGIN',
-      'SELECT',
-      'INSERT',
-      'COMMIT',
-    ]);
-    // Borrow: same shape
-    expect(borrowClient.query.mock.calls.map((c) => c[0].split(/\s+/u)[0])).toEqual([
-      'BEGIN',
-      'SELECT',
-      'INSERT',
-      'COMMIT',
-    ]);
-
-    // INSERT params must end with the stamp columns (tx_hash, log_index, block_hash, block_number)
-    const lendInsert = lendClient.query.mock.calls.find(
-      (c) => c[0].trim().startsWith('INSERT INTO lend_position'),
-    );
-    expect(lendInsert).toBeDefined();
-    const lendParams = lendInsert![1] as unknown[];
-    expect(lendParams[6]).toBeInstanceOf(Buffer); // tx_hash
-    expect(lendParams[7]).toBe(0); // log_index
-    expect(lendParams[8]).toBeInstanceOf(Buffer); // block_hash
-    expect(lendParams[9]).toBe('100'); // block_number (stringified bigint)
-
-    const borrowInsert = borrowClient.query.mock.calls.find(
-      (c) => c[0].trim().startsWith('INSERT INTO borrow_position'),
-    );
-    expect(borrowInsert).toBeDefined();
-    const borrowParams = borrowInsert![1] as unknown[];
-    expect(borrowParams[5]).toBeInstanceOf(Buffer);
-    expect(borrowParams[6]).toBe(1);
+  beforeEach(() => {
+    mockedApply.mockReset();
+    mockedApply.mockResolvedValue({ applied: true });
   });
 
-  it('short-circuits on already-stamped row without issuing INSERT', async () => {
-    // alreadyStamped returns count=1 → row already written, skip mutation.
-    const client = mockClient();
-    client.query.mockImplementation(async (sql: string) => {
-      if (/^SELECT count\(\*\)/i.test(sql.trim())) {
-        return {
-          rows: [{ count: '1' }],
-          rowCount: 1,
-          command: 'SELECT',
-          oid: 0,
-          fields: [],
-        } as unknown as QueryResult;
-      }
-      return {
-        rows: [],
-        rowCount: 0,
-        command: 'INSERT',
-        oid: 0,
-        fields: [],
-      } as unknown as QueryResult;
-    });
-    const pool = mockPool(() => client.client);
+  it('calls applyOnChainEffect once per parsed event with correct txHash, receipt, and logIndex', async () => {
+    const pool = fakePool();
+    const client = fakeClient();
+
+    await applySettlementResult(pool, client, settlementResult());
+
+    expect(mockedApply).toHaveBeenCalledTimes(2);
+
+    const lendCall = mockedApply.mock.calls[0]![0];
+    expect(lendCall.txHash).toBe(TX_HASH);
+    expect(lendCall.receipt).toBeDefined();
+    expect(lendCall.logIndex).toBe(0);
+    expect(lendCall.pool).toBe(pool);
+    expect(lendCall.client).toBe(client);
+    expect(lendCall.alreadyAppliedCheck).toBeDefined();
+    expect(typeof lendCall.mutation).toBe('function');
+
+    const borrowCall = mockedApply.mock.calls[1]![0];
+    expect(borrowCall.logIndex).toBe(1);
+    expect(borrowCall.txHash).toBe(TX_HASH);
+  });
+
+  it('processes multiple events sharing the same (marketId, lender) key — one helper call per logIndex', async () => {
+    const pool = fakePool();
+    const client = fakeClient();
 
     await applySettlementResult(
       pool,
-      settlementResult({ borrowPositionEvents: [] }),
-    );
-
-    // Expect BEGIN, SELECT count(*), ROLLBACK — NO INSERT
-    const verbs = client.query.mock.calls.map((c) => c[0].split(/\s+/u)[0]);
-    expect(verbs).toEqual(['BEGIN', 'SELECT', 'ROLLBACK']);
-    expect(verbs).not.toContain('INSERT');
-  });
-
-  it('connects to pool once per event (each in its own tx)', async () => {
-    const clients = [mockClient(), mockClient(), mockClient()];
-    const pool = mockPool(() => {
-      const next = clients.shift();
-      if (!next) throw new Error('unexpected connect');
-      return next.client;
-    });
-
-    await applySettlementResult(
-      pool,
+      client,
       settlementResult({
         lendPositionEvents: [
-          lendEvent({ logIndex: 0 }),
-          lendEvent({ logIndex: 2, lender: '0x5555555555555555555555555555555555555555' }),
+          lendEvent({ logIndex: 2, principal: 1_000_000n }),
+          lendEvent({ logIndex: 4, principal: 2_000_000n }),
+          lendEvent({ logIndex: 6, principal: 3_000_000n }),
         ],
-        borrowPositionEvents: [borrowEvent({ logIndex: 1 })],
+        borrowPositionEvents: [],
       }),
     );
 
-    expect((pool.connect as jest.Mock).mock.calls).toHaveLength(3);
+    expect(mockedApply).toHaveBeenCalledTimes(3);
+    const logIndexes = mockedApply.mock.calls.map((c) => c[0].logIndex);
+    expect(logIndexes).toEqual([2, 4, 6]);
   });
 
-  it('rolls back the pg tx when the INSERT throws', async () => {
-    const client = mockClient();
-    client.query.mockImplementation(async (sql: string) => {
-      if (/^SELECT count\(\*\)/i.test(sql.trim())) {
-        return {
-          rows: [{ count: '0' }],
-          rowCount: 1,
-          command: 'SELECT',
-          oid: 0,
-          fields: [],
-        } as unknown as QueryResult;
-      }
-      if (sql.trim().startsWith('INSERT')) {
-        throw new Error('simulated pg failure');
-      }
-      return {
-        rows: [],
-        rowCount: 0,
-        command: 'ROLLBACK',
-        oid: 0,
-        fields: [],
-      } as unknown as QueryResult;
-    });
-    const pool = mockPool(() => client.client);
+  it('uses distinct predicates per event so each log matches its own (marketId, user)', async () => {
+    const pool = fakePool();
+    const client = fakeClient();
 
-    await expect(
-      applySettlementResult(
-        pool,
-        settlementResult({ borrowPositionEvents: [] }),
-      ),
-    ).rejects.toThrow('simulated pg failure');
+    const lenderA = '0xaaaa000000000000000000000000000000000000';
+    const lenderB = '0xbbbb000000000000000000000000000000000000';
 
-    const verbs = client.query.mock.calls.map((c) => c[0].split(/\s+/u)[0]);
-    expect(verbs).toEqual(['BEGIN', 'SELECT', 'INSERT', 'ROLLBACK']);
-    expect(client.release).toHaveBeenCalled();
+    await applySettlementResult(
+      pool,
+      client,
+      settlementResult({
+        lendPositionEvents: [
+          lendEvent({ logIndex: 0, lender: lenderA }),
+          lendEvent({ logIndex: 2, lender: lenderB }),
+        ],
+        borrowPositionEvents: [],
+      }),
+    );
+
+    const predA = mockedApply.mock.calls[0]![0].expectedArgsPredicate;
+    const predB = mockedApply.mock.calls[1]![0].expectedArgsPredicate;
+
+    const shared = {
+      marketId:
+        '0x1111111111111111111111111111111111111111111111111111111111111111' as `0x${string}`,
+      bondToken:
+        '0x3333333333333333333333333333333333333333' as `0x${string}`,
+      cbtAmount: 1n,
+      principal: 1n,
+      rate: 1n,
+    };
+    expect(predA({ ...shared, lender: lenderA } as never)).toBe(true);
+    expect(predA({ ...shared, lender: lenderB } as never)).toBe(false);
+    expect(predB({ ...shared, lender: lenderB } as never)).toBe(true);
+    expect(predB({ ...shared, lender: lenderA } as never)).toBe(false);
   });
 
-  it('noop for a result with zero lend + zero borrow events', async () => {
-    const pool = mockPool(() => {
-      throw new Error('should not connect');
+  it('is a no-op for a result with zero events', async () => {
+    const pool = fakePool();
+    const client = fakeClient();
+
+    await applySettlementResult(
+      pool,
+      client,
+      settlementResult({
+        lendPositionEvents: [],
+        borrowPositionEvents: [],
+      }),
+    );
+
+    expect(mockedApply).not.toHaveBeenCalled();
+  });
+
+  it('continues processing remaining events when the helper reports non-fatal reasons', async () => {
+    mockedApply.mockResolvedValueOnce({
+      applied: false,
+      reason: 'already_stamped',
     });
+    mockedApply.mockResolvedValueOnce({
+      applied: false,
+      reason: 'args_mismatch',
+    });
+    mockedApply.mockResolvedValueOnce({ applied: true });
+
+    const pool = fakePool();
+    const client = fakeClient();
+
+    await applySettlementResult(
+      pool,
+      client,
+      settlementResult({
+        lendPositionEvents: [
+          lendEvent({ logIndex: 0 }),
+          lendEvent({ logIndex: 1 }),
+        ],
+        borrowPositionEvents: [borrowEvent({ logIndex: 2 })],
+      }),
+    );
+
+    expect(mockedApply).toHaveBeenCalledTimes(3);
+  });
+
+  it('propagates errors thrown by the helper (caller owns retry logic)', async () => {
+    mockedApply.mockRejectedValueOnce(new Error('pg exploded'));
+
+    const pool = fakePool();
+    const client = fakeClient();
+
     await expect(
-      applySettlementResult(
-        pool,
-        settlementResult({ lendPositionEvents: [], borrowPositionEvents: [] }),
-      ),
-    ).resolves.toBeUndefined();
-    expect((pool.connect as jest.Mock).mock.calls).toHaveLength(0);
+      applySettlementResult(pool, client, settlementResult()),
+    ).rejects.toThrow('pg exploded');
+  });
+
+  it("exercises the mutation callback against a PoolClient that executes the INSERT with stamp columns", async () => {
+    // When the helper invokes mutation(tx, decoded, stamp), the closure built
+    // by apply-settlement.ts must run the correct INSERT/UPSERT including the
+    // four applied_by_* stamp columns. Capture the mutation, invoke it with a
+    // fake client, and assert on the SQL + params.
+    const pool = fakePool();
+    const client = fakeClient();
+
+    await applySettlementResult(pool, client, settlementResult());
+
+    const mutation = mockedApply.mock.calls[0]![0].mutation;
+    const capturedQueries: { sql: string; params: readonly unknown[] }[] = [];
+    const fakeTx = {
+      query: jest.fn(async (sql: string, params: readonly unknown[]) => {
+        capturedQueries.push({ sql, params });
+        return { rows: [], rowCount: 0 };
+      }),
+    } as unknown as PoolClient;
+
+    await mutation(
+      fakeTx,
+      {
+        marketId:
+          '0x1111111111111111111111111111111111111111111111111111111111111111',
+        lender: '0x2222222222222222222222222222222222222222',
+        bondToken: '0x3333333333333333333333333333333333333333',
+        cbtAmount: 1n,
+        principal: 1n,
+        rate: 1n,
+      } as never,
+      {
+        txHash: TX_HASH,
+        blockHash: BLOCK_HASH,
+        blockNumber: 100n,
+        logIndex: 0,
+      },
+    );
+
+    expect(capturedQueries).toHaveLength(1);
+    expect(capturedQueries[0]!.sql).toMatch(/INSERT INTO lend_position/);
+    expect(capturedQueries[0]!.sql).toMatch(/ON CONFLICT \(market_id, lender\)/);
+    const params = capturedQueries[0]!.params;
+    // stamp columns: tx_hash, log_index, block_hash, block_number
+    expect(params[6]).toBeInstanceOf(Buffer);
+    expect(params[7]).toBe(0);
+    expect(params[8]).toBeInstanceOf(Buffer);
+    expect(params[9]).toBe('100');
   });
 });

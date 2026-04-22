@@ -5,9 +5,11 @@ import { logger } from '../logger';
 import {
   settleBatch,
   filterAlreadySettledMatches,
+  getPublicClient,
   type SettlementError,
 } from './smartContract';
 import { applySettlementResult, getPool, type DatabaseError } from './database';
+import { loadConfig } from '../config';
 import type { NonceManager } from './nonceManager';
 
 /**
@@ -202,7 +204,14 @@ export const processSettlementBatch = async (
   // indexer-v3 tail is a secondary safety net for any gaps we leave behind.
   try {
     const startTime = Date.now();
-    await applySettlementResult(getPool(), settlementResult);
+    // The cached viem public client is typed narrowly by createPublicClient;
+    // applyOnChainEffect declares the general PublicClient interface. Cast
+    // is safe because we always pass a pre-fetched receipt — client is never
+    // dereferenced by the helper in this path.
+    const publicClient = getPublicClient(
+      config ?? loadConfig(),
+    ) as unknown as import('viem').PublicClient;
+    await applySettlementResult(getPool(), publicClient, settlementResult);
     const duration = Date.now() - startTime;
 
     logger.info(

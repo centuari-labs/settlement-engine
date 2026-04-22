@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@centuari-labs/on-chain-effects':
-        specifier: ^0.1.0
-        version: 0.1.0(pg@8.17.2)(viem@2.44.4(typescript@5.9.3)(zod@3.25.76))
+        specifier: file:../on-chain-effects
+        version: file:../on-chain-effects(pg@8.17.2)(viem@2.44.4(typescript@5.9.3)(zod@3.25.76))
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
@@ -228,8 +228,8 @@ packages:
   '@bcoe/v8-coverage@0.2.3':
     resolution: {integrity: sha512-0hYQ8SB4Db5zvZB4axdMHGwEaQjkZzFjQiN9LVYvIFB2nSUHW9tYpxWriPrWDASIxiaXax83REcLxuSdnGPZtw==}
 
-  '@centuari-labs/on-chain-effects@0.1.0':
-    resolution: {integrity: sha512-hzoRSK5JlCUeLFyBfBv+yjE6pIIAxZsfmE3CkJW9NCdr3YklrasuJMz7yKnZkdfREeO+2ECUAuhDLW0aWIgRvA==, tarball: https://npm.pkg.github.com/download/@centuari-labs/on-chain-effects/0.1.0/6784c86160fcf05a8046aee17ae601b854aef0ab}
+  '@centuari-labs/on-chain-effects@file:../on-chain-effects':
+    resolution: {directory: ../on-chain-effects, type: directory}
     engines: {node: '>=22'}
     peerDependencies:
       pg: ^8.13.0
@@ -1788,7 +1788,7 @@ snapshots:
 
   '@bcoe/v8-coverage@0.2.3': {}
 
-  '@centuari-labs/on-chain-effects@0.1.0(pg@8.17.2)(viem@2.44.4(typescript@5.9.3)(zod@3.25.76))':
+  '@centuari-labs/on-chain-effects@file:../on-chain-effects(pg@8.17.2)(viem@2.44.4(typescript@5.9.3)(zod@3.25.76))':
     dependencies:
       pg: 8.17.2
       viem: 2.44.4(typescript@5.9.3)(zod@3.25.76)
