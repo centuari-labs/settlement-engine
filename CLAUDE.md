@@ -2,18 +2,18 @@
 
 ## Stack
 
-Node.js · TypeScript (strict) · Viem · ioredis (Streams + Consumer Groups) · PostgreSQL (raw pg) · Zod · Jest 29 · npm
+Node.js · TypeScript (strict) · Viem · ioredis (Streams + Consumer Groups) · PostgreSQL (raw pg) · Zod · Jest 29 · pnpm
 
 ## Commands
 
 ```bash
-npm run dev                # ts-node-dev --respawn --transpile-only
-npm run build              # tsc -p tsconfig.json
-npm run start              # node dist/index.js
-npm run test               # jest (all tests, 4GB heap)
-npm run test:unit          # unit only (ignores integration)
-npm run test:integration   # integration only
-npm run test:coverage      # with coverage report
+pnpm run dev                # ts-node-dev --respawn --transpile-only
+pnpm run build              # tsc -p tsconfig.json
+pnpm run start              # node dist/index.js
+pnpm run test               # jest (all tests, 4GB heap)
+pnpm run test:unit          # unit only (ignores integration)
+pnpm run test:integration   # integration only
+pnpm run test:coverage      # with coverage report
 ```
 
 ## Architecture

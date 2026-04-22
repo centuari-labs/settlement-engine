@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@centuari-labs/on-chain-effects':
+        specifier: ^0.1.0
+        version: 0.1.0(pg@8.17.2)(viem@2.44.4(typescript@5.9.3)(zod@3.25.76))
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
@@ -21,7 +24,7 @@ importers:
         specifier: ^9.0.0
         version: 9.14.0
       viem:
-        specifier: ^2.0.0
+        specifier: ^2.21.0
         version: 2.44.4(typescript@5.9.3)(zod@3.25.76)
       zod:
         specifier: ^3.23.8
@@ -224,6 +227,13 @@ packages:
 
   '@bcoe/v8-coverage@0.2.3':
     resolution: {integrity: sha512-0hYQ8SB4Db5zvZB4axdMHGwEaQjkZzFjQiN9LVYvIFB2nSUHW9tYpxWriPrWDASIxiaXax83REcLxuSdnGPZtw==}
+
+  '@centuari-labs/on-chain-effects@0.1.0':
+    resolution: {integrity: sha512-hzoRSK5JlCUeLFyBfBv+yjE6pIIAxZsfmE3CkJW9NCdr3YklrasuJMz7yKnZkdfREeO+2ECUAuhDLW0aWIgRvA==, tarball: https://npm.pkg.github.com/download/@centuari-labs/on-chain-effects/0.1.0/6784c86160fcf05a8046aee17ae601b854aef0ab}
+    engines: {node: '>=22'}
+    peerDependencies:
+      pg: ^8.13.0
+      viem: ^2.21.0
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -1777,6 +1787,11 @@ snapshots:
       '@babel/helper-validator-identifier': 7.28.5
 
   '@bcoe/v8-coverage@0.2.3': {}
+
+  '@centuari-labs/on-chain-effects@0.1.0(pg@8.17.2)(viem@2.44.4(typescript@5.9.3)(zod@3.25.76))':
+    dependencies:
+      pg: 8.17.2
+      viem: 2.44.4(typescript@5.9.3)(zod@3.25.76)
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
