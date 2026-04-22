@@ -23,7 +23,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@centuari/indexer-v3": "workspace:*",
+    "@centuari-labs/on-chain-effects": "^0.1.0",
     "dotenv": "^16.4.5",
     "ioredis": "^5.4.1",
     "pg": "^8.13.0",
