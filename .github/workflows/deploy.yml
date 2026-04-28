@@ -2,7 +2,7 @@ name: Build & Deploy settlement-engine
 
 on:
   push:
-    branches: [development, staging, main]
+    branches: [staging, testing]
   workflow_dispatch:
 
 concurrency:
@@ -20,20 +20,15 @@ jobs:
       - id: set
         run: |
           case "${{ github.ref_name }}" in
-            development)
-              echo "env=dev" >> $GITHUB_OUTPUT
-              echo "namespace=centuari-dev" >> $GITHUB_OUTPUT
-              echo "compose_cmd=docker compose -f compose.dev.yml -p centuari-dev" >> $GITHUB_OUTPUT
-              ;;
             staging)
               echo "env=staging" >> $GITHUB_OUTPUT
               echo "namespace=centuari-staging" >> $GITHUB_OUTPUT
               echo "compose_cmd=docker compose -f compose.staging.yml -p centuari-staging" >> $GITHUB_OUTPUT
               ;;
-            main)
-              echo "env=prod" >> $GITHUB_OUTPUT
-              echo "namespace=centuari" >> $GITHUB_OUTPUT
-              echo "compose_cmd=docker compose -f compose.prod.yml" >> $GITHUB_OUTPUT
+            testing)
+              echo "env=testing" >> $GITHUB_OUTPUT
+              echo "namespace=centuari-testing" >> $GITHUB_OUTPUT
+              echo "compose_cmd=docker compose -f compose.testing.yml -p centuari-testing" >> $GITHUB_OUTPUT
               ;;
             *)
               echo "Unknown branch ${{ github.ref_name }}" >&2
@@ -76,7 +71,7 @@ jobs:
       IMAGE_NAME: ${{ needs.detect-env.outputs.namespace }}/settlement-engine
       REGISTRY: localhost:5000
       COMPOSE_CMD: ${{ needs.detect-env.outputs.compose_cmd }}
-      SERVICE_NAME: settlement-engine${{ needs.detect-env.outputs.env == 'prod' && '' || format('-{0}', needs.detect-env.outputs.env) }}
+      SERVICE_NAME: settlement-engine-${{ needs.detect-env.outputs.env }}
     steps:
       - uses: actions/checkout@v4
 
