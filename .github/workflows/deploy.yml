@@ -115,12 +115,16 @@ jobs:
         run: pkill -f "ssh.*-L 5000:127.0.0.1:5000" || true
 
       - name: Deploy to VPS
+        # Force-remove the container by name first, in case it was created with a
+        # different compose project label (legacy bootstrap). Otherwise compose -p
+        # cannot manage it and `up -d` errors with "name already in use".
         run: |
           ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT || 22 }} \
             ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
             "cd ~/centuari && \
+             docker rm -f centuari-${{ needs.detect-env.outputs.env }}-settlement-engine 2>/dev/null || true && \
              ${{ env.COMPOSE_CMD }} pull ${{ env.SERVICE_NAME }} && \
-             ${{ env.COMPOSE_CMD }} up -d --no-deps --force-recreate ${{ env.SERVICE_NAME }} && \
+             ${{ env.COMPOSE_CMD }} up -d --no-deps ${{ env.SERVICE_NAME }} && \
              docker image prune -f"
 
       - name: Cleanup local images
