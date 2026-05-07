@@ -1,4 +1,5 @@
 import type Redis from 'ioredis';
+import type { Address } from 'viem';
 import type { MatchWithMeta } from '../redis/settlementMatchConsumer';
 import type { AppConfig } from '../config';
 import { logger } from '../logger';
@@ -8,7 +9,12 @@ import {
   getPublicClient,
   type SettlementError,
 } from './smartContract';
-import { applySettlementResult, getPool, type DatabaseError } from './database';
+import {
+  applySettlementResult,
+  getPool,
+  readPendingCollateralFlagsForBorrowers,
+  type DatabaseError,
+} from './database';
 import { loadConfig } from '../config';
 import type { NonceManager } from './nonceManager';
 
@@ -150,6 +156,54 @@ export const processSettlementBatch = async (
     return;
   }
 
+  // Step 0.5: Read `pending_collateral_flags` for the distinct borrowers in
+  // this batch. The result map drives `MatchData.collateralAssets` per match
+  // inside `settleBatch` → `transformMatchToContractFormat`. Reading here
+  // (immediately before submitting the on-chain tx) keeps the race window
+  // between user unflag and settle to ~tens of milliseconds — the queue
+  // truly represents the user's latest intent at submit time. The match
+  // payload's plumbing-only `borrowerCollateralAssets` (P2) is intentionally
+  // ignored: a stale order-time snapshot would defeat the unflag race fix.
+  let collateralAssetsByBorrower: Map<string, readonly Address[]> = new Map();
+  try {
+    const distinctBorrowers = Array.from(
+      new Set(
+        unsettled.map((m) => (m.payload.borrowerWallet as Address).toLowerCase()),
+      ),
+    ) as Address[];
+    collateralAssetsByBorrower = await readPendingCollateralFlagsForBorrowers(
+      getPool(),
+      distinctBorrowers,
+    );
+    if (collateralAssetsByBorrower.size > 0) {
+      logger.info(
+        {
+          component: 'process-settlement-batch',
+          borrowersWithFlags: collateralAssetsByBorrower.size,
+          totalAssets: Array.from(collateralAssetsByBorrower.values()).reduce(
+            (sum, arr) => sum + arr.length,
+            0,
+          ),
+        },
+        'Read pending collateral flags for batch',
+      );
+    }
+  } catch (error) {
+    // Reading the queue is best-effort: if it fails we still settle the
+    // batch with empty `collateralAssets` arrays. The user's queued flags
+    // will land at the next settlement (queue rows persist) or via a
+    // direct-caller `CollateralManager.flag(asset)` call. Aborting the
+    // entire batch over a transient queue read is the wrong tradeoff.
+    logger.error(
+      {
+        component: 'process-settlement-batch',
+        err: (error as Error).message,
+        borrowerCount: unsettled.length,
+      },
+      'Failed to read pending_collateral_flags — settling without collateral encoding',
+    );
+  }
+
   let settlementResult;
   try {
     // Step 1: Call smart contract to settle the batch
@@ -158,6 +212,7 @@ export const processSettlementBatch = async (
       matches: unsettled.map((m) => m.payload),
       config,
       nonceManager: context.nonceManager,
+      collateralAssetsByBorrower,
     });
     const duration = Date.now() - startTime;
 

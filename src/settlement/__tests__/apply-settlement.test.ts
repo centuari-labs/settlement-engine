@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
-import type { PublicClient, TransactionReceipt } from 'viem';
+import { encodeAbiParameters, keccak256, toHex } from 'viem';
+import type { Hex, PublicClient, TransactionReceipt } from 'viem';
 import type {
   ParsedBorrowPosition,
   ParsedLendPosition,
@@ -12,8 +13,74 @@ jest.mock('@centuari-labs/on-chain-effects', () => {
   };
 });
 
+jest.mock('../database/connection', () => {
+  const actual = jest.requireActual('../database/connection');
+  return {
+    ...actual,
+    withTransaction: jest.fn(
+      async <T,>(fn: (client: PoolClient) => Promise<T>): Promise<T> => {
+        const fakeTx = {
+          query: jest.fn(async () => ({ rows: [], rowCount: 0 })),
+        } as unknown as PoolClient;
+        return fn(fakeTx);
+      },
+    ),
+  };
+});
+
+jest.mock('../database/pending-collateral-flags', () => ({
+  clearForEvent: jest.fn(async () => {}),
+}));
+
 import { applyOnChainEffect } from '@centuari-labs/on-chain-effects';
 import { applySettlementResult } from '../database/apply-settlement';
+import { withTransaction } from '../database/connection';
+import { clearForEvent } from '../database/pending-collateral-flags';
+
+const mockedWithTransaction = withTransaction as jest.MockedFunction<
+  typeof withTransaction
+>;
+const mockedClearForEvent = clearForEvent as jest.MockedFunction<
+  typeof clearForEvent
+>;
+
+const COLLATERAL_FLAG_SET_TOPIC0 = keccak256(
+  toHex('CollateralFlagSet(address,address,address,bool,uint64)'),
+);
+
+const padAddressTopic = (addr: string): Hex =>
+  `0x${addr.replace(/^0x/, '').padStart(64, '0').toLowerCase()}` as Hex;
+
+const buildCollateralFlagLog = (params: {
+  writer?: string;
+  user: string;
+  asset: string;
+  used?: boolean;
+  flaggedAt?: bigint;
+  logIndex: number;
+}) => {
+  const writer = params.writer ?? '0x0000000000000000000000000000000000001234';
+  const used = params.used ?? true;
+  const flaggedAt = params.flaggedAt ?? 1_700_000_000n;
+  const data = encodeAbiParameters(
+    [
+      { name: 'used', type: 'bool' },
+      { name: 'flaggedAt', type: 'uint64' },
+    ],
+    [used, flaggedAt],
+  );
+  return {
+    address: '0x000000000000000000000000000000000000beef' as Hex,
+    topics: [
+      COLLATERAL_FLAG_SET_TOPIC0,
+      padAddressTopic(writer),
+      padAddressTopic(params.user),
+      padAddressTopic(params.asset),
+    ] as readonly Hex[],
+    data,
+    logIndex: params.logIndex,
+  };
+};
 
 const mockedApply = applyOnChainEffect as jest.MockedFunction<
   typeof applyOnChainEffect
@@ -84,6 +151,8 @@ describe('applySettlementResult', () => {
   beforeEach(() => {
     mockedApply.mockReset();
     mockedApply.mockResolvedValue({ applied: true });
+    mockedWithTransaction.mockClear();
+    mockedClearForEvent.mockClear();
   });
 
   it('calls applyOnChainEffect once per parsed event with correct txHash, receipt, and logIndex', async () => {
@@ -270,5 +339,148 @@ describe('applySettlementResult', () => {
     expect(params[7]).toBe(0);
     expect(params[8]).toBeInstanceOf(Buffer);
     expect(params[9]).toBe('100');
+  });
+
+  describe('CollateralFlagSet eager queue cleanup (Phase 3)', () => {
+    it('does not invoke withTransaction when the receipt has no CollateralFlagSet logs', async () => {
+      await applySettlementResult(fakePool(), fakeClient(), settlementResult());
+      expect(mockedWithTransaction).not.toHaveBeenCalled();
+      expect(mockedClearForEvent).not.toHaveBeenCalled();
+    });
+
+    it('DELETEs one queue row per CollateralFlagSet event in the receipt', async () => {
+      const userA = '0xaaaa000000000000000000000000000000000001';
+      const userB = '0xbbbb000000000000000000000000000000000002';
+      const assetX = '0xcccc000000000000000000000000000000000003';
+      const assetY = '0xdddd000000000000000000000000000000000004';
+
+      const receiptWithFlagLogs = {
+        ...fakeReceipt(),
+        logs: [
+          buildCollateralFlagLog({ user: userA, asset: assetX, logIndex: 5 }),
+          buildCollateralFlagLog({ user: userB, asset: assetY, logIndex: 7 }),
+        ],
+      } as unknown as TransactionReceipt;
+
+      await applySettlementResult(
+        fakePool(),
+        fakeClient(),
+        settlementResult({
+          lendPositionEvents: [],
+          borrowPositionEvents: [],
+          receipt: receiptWithFlagLogs,
+        }),
+      );
+
+      // Single transaction wrapping both DELETEs.
+      expect(mockedWithTransaction).toHaveBeenCalledTimes(1);
+      expect(mockedClearForEvent).toHaveBeenCalledTimes(2);
+
+      // Decoded args reach clearForEvent in checksum-cased form (viem
+      // normalizes); compare lowercased.
+      const calls = mockedClearForEvent.mock.calls.map(
+        ([, user, asset]) => ({
+          user: (user as string).toLowerCase(),
+          asset: (asset as string).toLowerCase(),
+        }),
+      );
+      expect(calls).toEqual([
+        { user: userA, asset: assetX },
+        { user: userB, asset: assetY },
+      ]);
+    });
+
+    it('also DELETEs on used=false events (defensive — Centuari.settleMatch only emits used=true today, but unflag mid-batch must not leak queue rows)', async () => {
+      const user = '0xaaaa000000000000000000000000000000000001';
+      const asset = '0xcccc000000000000000000000000000000000003';
+
+      const receipt = {
+        ...fakeReceipt(),
+        logs: [
+          buildCollateralFlagLog({ user, asset, used: false, logIndex: 3 }),
+        ],
+      } as unknown as TransactionReceipt;
+
+      await applySettlementResult(
+        fakePool(),
+        fakeClient(),
+        settlementResult({
+          lendPositionEvents: [],
+          borrowPositionEvents: [],
+          receipt,
+        }),
+      );
+
+      expect(mockedClearForEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips logs with mismatched topic0 (no impact on non-CollateralFlagSet logs in the same receipt)', async () => {
+      const otherTopic =
+        '0x1234567890123456789012345678901234567890123456789012345678901234' as Hex;
+      const receipt = {
+        ...fakeReceipt(),
+        logs: [
+          {
+            address: '0x000000000000000000000000000000000000beef' as Hex,
+            topics: [otherTopic] as readonly Hex[],
+            data: '0x' as Hex,
+            logIndex: 0,
+          },
+        ],
+      } as unknown as TransactionReceipt;
+
+      await applySettlementResult(
+        fakePool(),
+        fakeClient(),
+        settlementResult({
+          lendPositionEvents: [],
+          borrowPositionEvents: [],
+          receipt,
+        }),
+      );
+
+      expect(mockedWithTransaction).not.toHaveBeenCalled();
+      expect(mockedClearForEvent).not.toHaveBeenCalled();
+    });
+
+    it('skips a single malformed log without aborting the others (defensive parse)', async () => {
+      const userOk = '0xaaaa000000000000000000000000000000000001';
+      const assetOk = '0xcccc000000000000000000000000000000000003';
+
+      const malformed = {
+        // Right topic0 but missing the indexed user/asset topics → decode
+        // throws.
+        address: '0x000000000000000000000000000000000000beef' as Hex,
+        topics: [COLLATERAL_FLAG_SET_TOPIC0] as readonly Hex[],
+        data: '0x' as Hex,
+        logIndex: 0,
+      };
+
+      const receipt = {
+        ...fakeReceipt(),
+        logs: [
+          malformed,
+          buildCollateralFlagLog({
+            user: userOk,
+            asset: assetOk,
+            logIndex: 1,
+          }),
+        ],
+      } as unknown as TransactionReceipt;
+
+      await applySettlementResult(
+        fakePool(),
+        fakeClient(),
+        settlementResult({
+          lendPositionEvents: [],
+          borrowPositionEvents: [],
+          receipt,
+        }),
+      );
+
+      // The good log still gets cleared; the malformed one is logged and
+      // skipped.
+      expect(mockedClearForEvent).toHaveBeenCalledTimes(1);
+    });
   });
 });

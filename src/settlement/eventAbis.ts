@@ -44,8 +44,29 @@ export const BORROW_POSITION_CREATED_EVENT = {
   anonymous: false,
 } as const;
 
+/**
+ * Emitted by BalanceLedger.markCollateral / unmarkCollateral. The 5-param
+ * shape is the canonical Phase 1 event after the P1b-explicit refactor
+ * (writer + user + asset + used + flaggedAt). Settlement-engine parses these
+ * from the receipt of its own `Settlement.settleMatches` tx and DELETEs the
+ * matching `pending_collateral_flags` rows (Phase 3 eager queue cleanup).
+ */
+export const COLLATERAL_FLAG_SET_EVENT = {
+  type: 'event',
+  name: 'CollateralFlagSet',
+  inputs: [
+    { name: 'writer', type: 'address', indexed: true, internalType: 'address' },
+    { name: 'user', type: 'address', indexed: true, internalType: 'address' },
+    { name: 'asset', type: 'address', indexed: true, internalType: 'address' },
+    { name: 'used', type: 'bool', indexed: false, internalType: 'bool' },
+    { name: 'flaggedAt', type: 'uint64', indexed: false, internalType: 'uint64' },
+  ],
+  anonymous: false,
+} as const;
+
 export const SETTLEMENT_EVENT_ABIS = [
   BOND_TOKEN_CREATED_EVENT,
   LEND_POSITION_CREATED_EVENT,
   BORROW_POSITION_CREATED_EVENT,
+  COLLATERAL_FLAG_SET_EVENT,
 ] as const;

@@ -162,6 +162,19 @@ export interface SettleBatchOptions {
    * When provided, acquires and manages nonces for each transaction.
    */
   readonly nonceManager?: NonceManager;
+  /**
+   * Per-borrower lookup of pending collateral flag assets read from
+   * `pending_collateral_flags` at settle time (Phase 3 queue-driven encoder).
+   * Each match's `borrower` is keyed by lowercase address into this map; the
+   * resolved array is encoded into `MatchData.collateralAssets` so
+   * `Centuari.settleMatch` flags exactly the assets the user has currently
+   * queued. Absent map / absent borrower entries default to `[]` — the
+   * settle call still goes through, just with no on-chain flag mutation.
+   * The match payload's plumbing-only `borrowerCollateralAssets` (P2) is
+   * NOT used here — settlement reads the queue directly so the user's
+   * latest unflag wins over a stale order-time snapshot.
+   */
+  readonly collateralAssetsByBorrower?: ReadonlyMap<string, readonly Address[]>;
 }
 
 /**
@@ -215,16 +228,32 @@ const uuidToBytes32Direct = (uuid: string): Hash => {
  * Transforms a Match object to the contract's MatchData struct format.
  *
  * @param match - Match object to transform.
+ * @param collateralAssetsByBorrower - Optional per-borrower queue lookup
+ *   from Phase 3 (`pending_collateral_flags`). The key is the lowercased
+ *   borrower address. Missing entries resolve to `[]` so settle still goes
+ *   through with no on-chain flag mutation for that borrower.
  * @returns MatchData struct in the format expected by the contract.
  */
-const transformMatchToContractFormat = (match: Match) => {
+const transformMatchToContractFormat = (
+  match: Match,
+  collateralAssetsByBorrower?: ReadonlyMap<string, readonly Address[]>,
+) => {
+  const borrower = match.borrowerWallet as Address;
+  const queued = collateralAssetsByBorrower?.get(borrower.toLowerCase());
+  // Defensive de-dupe + lowercase: the repo already returns
+  // case-normalized + de-duped arrays, but this guards against future
+  // callers passing the map directly without going through the repo.
+  const collateralAssets = queued
+    ? Array.from(new Set(queued.map((a) => a.toLowerCase()))) as Address[]
+    : [];
+
   return {
     matchId: uuidToBytes32(match.matchId),
     marketId: uuidToBytes32Direct(match.marketId),
     lendOrderId: uuidToBytes32(match.lendOrderId),
     borrowOrderId: uuidToBytes32(match.borrowOrderId),
     lender: match.lenderWallet as Address,
-    borrower: match.borrowerWallet as Address,
+    borrower,
     matchedAmount: BigInt(match.matchedAmount),
     rate: BigInt(match.rate),
     loanToken: match.loanToken as Address,
@@ -235,6 +264,7 @@ const transformMatchToContractFormat = (match: Match) => {
     borrowerSettlementFee: BigInt(match.borrowerSettlementFeeAmount),
     makerFeeAmount: BigInt(match.makerFeeAmount),
     takerFeeAmount: BigInt(match.takerFeeAmount),
+    collateralAssets,
   };
 };
 
@@ -651,6 +681,7 @@ export const settleBatch = async (
     retryDelayMs = 1000,
     config = loadConfig(),
     nonceManager,
+    collateralAssetsByBorrower,
   } = options;
 
   if (matches.length === 0) {
@@ -667,8 +698,12 @@ export const settleBatch = async (
   const walletClient = getWalletClient(config);
   const account = walletClient.account!;
 
-  // Transform matches to contract format
-  const contractMatches = matches.map(transformMatchToContractFormat);
+  // Transform matches to contract format. Per-borrower `collateralAssets`
+  // are filled from the upstream `pending_collateral_flags` lookup (Phase 3
+  // queue-driven encoder); missing entries default to `[]`.
+  const contractMatches = matches.map((m) =>
+    transformMatchToContractFormat(m, collateralAssetsByBorrower),
+  );
 
   logger.info(
     {

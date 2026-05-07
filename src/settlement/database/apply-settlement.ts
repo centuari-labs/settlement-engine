@@ -9,12 +9,14 @@ import {
   type Hex,
   type PublicClient,
   type TransactionReceipt,
+  decodeEventLog,
   keccak256,
   toHex,
 } from 'viem';
 import { logger } from '../../logger';
 import {
   BORROW_POSITION_CREATED_EVENT,
+  COLLATERAL_FLAG_SET_EVENT,
   LEND_POSITION_CREATED_EVENT,
 } from '../eventAbis';
 import type {
@@ -22,6 +24,8 @@ import type {
   ParsedLendPosition,
   SettlementResult,
 } from '../smartContract';
+import { withTransaction } from './connection';
+import { clearForEvent as clearPendingCollateralFlag } from './pending-collateral-flags';
 
 /**
  * Eager-write settlement events into indexer-v3's BYTEA-keyed schema
@@ -56,6 +60,9 @@ const LEND_POSITION_CREATED_TOPIC0 = keccak256(
 );
 const BORROW_POSITION_CREATED_TOPIC0 = keccak256(
   toHex('BorrowPositionCreated(bytes32,address,uint256,uint256,uint256)'),
+);
+const COLLATERAL_FLAG_SET_TOPIC0 = keccak256(
+  toHex('CollateralFlagSet(address,address,address,bool,uint64)'),
 );
 
 interface LendEventArgs {
@@ -263,6 +270,82 @@ const logOutcome = (
 };
 
 /**
+ * Parse `CollateralFlagSet` events from the receipt and DELETE the matching
+ * `pending_collateral_flags` rows in a single transaction. Idempotent:
+ * DELETEs no-op if the row was already removed (e.g. by the indexer-v3 tail
+ * writer or by a prior eager run). Defensively DELETEs on `used=false`
+ * events too — these never appear in a settle-driven receipt today
+ * (Centuari.settleMatch only emits `used=true`), but the DELETE is cheap and
+ * future-proofs against an unflag emission slipping into the same tx.
+ *
+ * We don't go through `applyOnChainEffect` here because there's no
+ * idempotency stamp to maintain — the queue is a transient backend-owned
+ * buffer, not part of the indexer-v3 shared schema. `DELETE WHERE` is its
+ * own idempotency.
+ */
+const clearPendingCollateralFlagsFromReceipt = async (
+  pool: Pool,
+  receipt: TransactionReceipt,
+): Promise<number> => {
+  interface DecodedFlagEvent {
+    readonly user: Address;
+    readonly asset: Address;
+    readonly used: boolean;
+    readonly logIndex: number;
+  }
+
+  const events: DecodedFlagEvent[] = [];
+  for (const log of receipt.logs) {
+    if (log.topics[0]?.toLowerCase() !== COLLATERAL_FLAG_SET_TOPIC0.toLowerCase()) {
+      continue;
+    }
+    try {
+      const decoded = decodeEventLog({
+        abi: [COLLATERAL_FLAG_SET_EVENT],
+        data: log.data,
+        topics: log.topics,
+      });
+      if (decoded.eventName !== 'CollateralFlagSet') continue;
+      events.push({
+        user: decoded.args.user as Address,
+        asset: decoded.args.asset as Address,
+        used: decoded.args.used as boolean,
+        logIndex: Number(log.logIndex ?? -1),
+      });
+    } catch (err) {
+      logger.warn(
+        {
+          component: 'apply-settlement',
+          txHash: receipt.transactionHash,
+          logIndex: log.logIndex,
+          err: (err as Error).message,
+        },
+        'Failed to decode CollateralFlagSet log — skipping',
+      );
+    }
+  }
+
+  if (events.length === 0) return 0;
+
+  await withTransaction(async (tx) => {
+    for (const ev of events) {
+      await clearPendingCollateralFlag(tx, ev.user, ev.asset);
+    }
+  });
+
+  logger.info(
+    {
+      component: 'apply-settlement',
+      txHash: receipt.transactionHash,
+      collateralFlagEvents: events.length,
+    },
+    'Cleared pending_collateral_flags rows from CollateralFlagSet events',
+  );
+
+  return events.length;
+};
+
+/**
  * Apply every position event in a settlement result to indexer-v3 tables via
  * the shared `applyOnChainEffect` primitive. Each call scopes the event to a
  * specific `logIndex` so that a single settlement tx can emit multiple events
@@ -271,6 +354,12 @@ const logOutcome = (
  * individually — the `ON CONFLICT` upsert then accumulates principal and
  * cbt_balance correctly. Relying on match-first topic selection here would
  * silently drop every event past the first.
+ *
+ * After position events apply, parse `CollateralFlagSet` events from the
+ * same receipt and DELETE matching `pending_collateral_flags` rows (Phase 3
+ * eager queue cleanup). The indexer-v3 `balance-ledger.processor.ts` tail
+ * writer (Phase 4) does the same DELETE idempotently for direct-caller
+ * events and any eager-path crashes.
  */
 export const applySettlementResult = async (
   pool: Pool,
@@ -307,6 +396,11 @@ export const applySettlementResult = async (
     );
   }
 
+  const collateralFlagsCleared = await clearPendingCollateralFlagsFromReceipt(
+    pool,
+    receipt,
+  );
+
   logger.info(
     {
       component: 'apply-settlement',
@@ -314,6 +408,7 @@ export const applySettlementResult = async (
       blockNumber: Number(receipt.blockNumber),
       lendPositions: result.lendPositionEvents.length,
       borrowPositions: result.borrowPositionEvents.length,
+      collateralFlagsCleared,
     },
     'Applied settlement result to indexer-v3 schema',
   );

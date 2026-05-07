@@ -32,6 +32,13 @@ export const SETTLEMENT_CONTRACT_ABI = [
           { name: 'borrowerSettlementFee', type: 'uint256' },
           { name: 'makerFeeAmount', type: 'uint256' },
           { name: 'takerFeeAmount', type: 'uint256' },
+          // P1b-explicit (smart contract 2026-04-17): borrower's pending
+          // collateral flag requests, fulfilled by Centuari.settleMatch via
+          // markCollateral(borrower, asset). Settlement-engine reads this
+          // from `pending_collateral_flags` at settle time (Phase 3) — never
+          // from the match payload — so the user's latest intent wins
+          // within a microscopic ~tens-of-ms race window.
+          { name: 'collateralAssets', type: 'address[]' },
         ],
       },
     ],
