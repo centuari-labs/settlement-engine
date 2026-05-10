@@ -19,12 +19,14 @@ import {
   COLLATERAL_FLAG_SET_EVENT,
   LEND_POSITION_CREATED_EVENT,
 } from '../eventAbis';
+import type { Match } from '../../schemas/match';
 import type {
   ParsedBorrowPosition,
   ParsedLendPosition,
   SettlementResult,
 } from '../smartContract';
 import { withTransaction } from './connection';
+import { writebackSettledMatches } from './lock-release';
 import { clearForEvent as clearPendingCollateralFlag } from './pending-collateral-flags';
 
 /**
@@ -360,11 +362,20 @@ const clearPendingCollateralFlagsFromReceipt = async (
  * eager queue cleanup). The indexer-v3 `balance-ledger.processor.ts` tail
  * writer (Phase 4) does the same DELETE idempotently for direct-caller
  * events and any eager-path crashes.
+ *
+ * Last, write back the order-lock lifecycle: flip every settled match from
+ * `settlement_status='PENDING'` to `'SETTLED'` and decrement both sides of
+ * `portfolio.locked_amount` by the exact amounts the db-writer added at
+ * match time. Idempotent on retry — see lock-release.ts for details. The
+ * caller passes the original `Match[]` payloads so we have the per-side fee
+ * decomposition; `result.settledMatchIds` filters the array down to the
+ * subset that actually settled this batch.
  */
 export const applySettlementResult = async (
   pool: Pool,
   client: PublicClient,
   result: SettlementResult,
+  matches: readonly Match[],
 ): Promise<void> => {
   const { receipt } = result;
 
@@ -401,6 +412,14 @@ export const applySettlementResult = async (
     receipt,
   );
 
+  const settledMatchIdSet = new Set(result.settledMatchIds);
+  const writebackResult = await writebackSettledMatches(
+    pool,
+    matches,
+    settledMatchIdSet,
+    receipt.transactionHash,
+  );
+
   logger.info(
     {
       component: 'apply-settlement',
@@ -409,6 +428,8 @@ export const applySettlementResult = async (
       lendPositions: result.lendPositionEvents.length,
       borrowPositions: result.borrowPositionEvents.length,
       collateralFlagsCleared,
+      matchesWrittenBack: writebackResult.settled,
+      matchesAlreadySettled: writebackResult.alreadySettled,
     },
     'Applied settlement result to indexer-v3 schema',
   );

@@ -19,3 +19,8 @@ export {
   recordFailedMatches,
   restoreOrdersForFailedMatches,
 } from './order-failure';
+
+export {
+  applyMatchSettlementWriteback,
+  writebackSettledMatches,
+} from './lock-release';

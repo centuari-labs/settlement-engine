@@ -266,7 +266,12 @@ export const processSettlementBatch = async (
     const publicClient = getPublicClient(
       config ?? loadConfig(),
     ) as unknown as import('viem').PublicClient;
-    await applySettlementResult(getPool(), publicClient, settlementResult);
+    await applySettlementResult(
+      getPool(),
+      publicClient,
+      settlementResult,
+      unsettled.map((m) => m.payload),
+    );
     const duration = Date.now() - startTime;
 
     logger.info(

@@ -159,7 +159,7 @@ describe('applySettlementResult', () => {
     const pool = fakePool();
     const client = fakeClient();
 
-    await applySettlementResult(pool, client, settlementResult());
+    await applySettlementResult(pool, client, settlementResult(), []);
 
     expect(mockedApply).toHaveBeenCalledTimes(2);
 
@@ -192,6 +192,7 @@ describe('applySettlementResult', () => {
         ],
         borrowPositionEvents: [],
       }),
+      [],
     );
 
     expect(mockedApply).toHaveBeenCalledTimes(3);
@@ -216,6 +217,7 @@ describe('applySettlementResult', () => {
         ],
         borrowPositionEvents: [],
       }),
+      [],
     );
 
     const predA = mockedApply.mock.calls[0]![0].expectedArgsPredicate;
@@ -247,6 +249,7 @@ describe('applySettlementResult', () => {
         lendPositionEvents: [],
         borrowPositionEvents: [],
       }),
+      [],
     );
 
     expect(mockedApply).not.toHaveBeenCalled();
@@ -276,6 +279,7 @@ describe('applySettlementResult', () => {
         ],
         borrowPositionEvents: [borrowEvent({ logIndex: 2 })],
       }),
+      [],
     );
 
     expect(mockedApply).toHaveBeenCalledTimes(3);
@@ -288,7 +292,7 @@ describe('applySettlementResult', () => {
     const client = fakeClient();
 
     await expect(
-      applySettlementResult(pool, client, settlementResult()),
+      applySettlementResult(pool, client, settlementResult(), []),
     ).rejects.toThrow('pg exploded');
   });
 
@@ -300,7 +304,7 @@ describe('applySettlementResult', () => {
     const pool = fakePool();
     const client = fakeClient();
 
-    await applySettlementResult(pool, client, settlementResult());
+    await applySettlementResult(pool, client, settlementResult(), []);
 
     const mutation = mockedApply.mock.calls[0]![0].mutation;
     const capturedQueries: { sql: string; params: readonly unknown[] }[] = [];
@@ -343,7 +347,7 @@ describe('applySettlementResult', () => {
 
   describe('CollateralFlagSet eager queue cleanup (Phase 3)', () => {
     it('does not invoke withTransaction when the receipt has no CollateralFlagSet logs', async () => {
-      await applySettlementResult(fakePool(), fakeClient(), settlementResult());
+      await applySettlementResult(fakePool(), fakeClient(), settlementResult(), []);
       expect(mockedWithTransaction).not.toHaveBeenCalled();
       expect(mockedClearForEvent).not.toHaveBeenCalled();
     });
@@ -370,6 +374,7 @@ describe('applySettlementResult', () => {
           borrowPositionEvents: [],
           receipt: receiptWithFlagLogs,
         }),
+        [],
       );
 
       // Single transaction wrapping both DELETEs.
@@ -409,6 +414,7 @@ describe('applySettlementResult', () => {
           borrowPositionEvents: [],
           receipt,
         }),
+        [],
       );
 
       expect(mockedClearForEvent).toHaveBeenCalledTimes(1);
@@ -437,6 +443,7 @@ describe('applySettlementResult', () => {
           borrowPositionEvents: [],
           receipt,
         }),
+        [],
       );
 
       expect(mockedWithTransaction).not.toHaveBeenCalled();
@@ -476,6 +483,7 @@ describe('applySettlementResult', () => {
           borrowPositionEvents: [],
           receipt,
         }),
+        [],
       );
 
       // The good log still gets cleared; the malformed one is logged and
