@@ -16,11 +16,17 @@ import { withTransaction } from './connection';
  * (`wallet - locked_amount - sum_open_orders`) under-counts the user's
  * available funds for as long as the lock is stale.
  *
- * This helper extends the existing `applyOnChainEffect` mutation closure
- * in apply-settlement.ts to:
- *   1. Mark `matches.settlement_status = 'SETTLED'` (idempotent — only
+ * This helper runs alongside `applyOnChainEffect` (called from
+ * `applySettlementResult` in apply-settlement.ts AFTER the per-event
+ * position writes), in its own per-match `withTransaction`. It does NOT
+ * extend the `applyOnChainEffect` mutation closure — keeping the
+ * writeback in a separate transaction means a partial failure on one
+ * match's writeback doesn't block writeback for the rest of the batch.
+ *
+ * For each settled match it:
+ *   1. Marks `matches.settlement_status = 'SETTLED'` (idempotent — only
  *      transitions PENDING → SETTLED via the WHERE guard).
- *   2. Decrement both sides of `portfolio.locked_amount` by the exact
+ *   2. Decrements both sides of `portfolio.locked_amount` by the exact
  *      amounts the db-writer added at match time.
  *
  * Idempotency: a retried settlement attempt on the same match is a natural
