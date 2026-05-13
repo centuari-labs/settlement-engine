@@ -1,68 +1,31 @@
 /**
  * Event ABI definitions for parsing settlement transaction receipt logs.
- * Sourced from Centuari and CentuariBondERC20Factory contracts.
+ * Sourced from Centuari, CentuariBondERC20Factory, and BalanceLedger
+ * contracts. Full ABIs are synced from smart-contract-revamp via
+ * bin/sync-to-services.sh — see src/abi/*.json.
  */
 
-export const BOND_TOKEN_CREATED_EVENT = {
-  type: 'event',
-  name: 'BondTokenCreated',
-  inputs: [
-    { name: 'marketId', type: 'bytes32', indexed: true, internalType: 'bytes32' },
-    { name: 'bondToken', type: 'address', indexed: true, internalType: 'address' },
-    { name: 'loanToken', type: 'address', indexed: true, internalType: 'address' },
-    { name: 'maturity', type: 'uint256', indexed: false, internalType: 'uint256' },
-    { name: 'name', type: 'string', indexed: false, internalType: 'string' },
-    { name: 'symbol', type: 'string', indexed: false, internalType: 'string' },
-  ],
-  anonymous: false,
-} as const;
+import type { AbiEvent } from 'viem';
+import BalanceLedger from '../abi/BalanceLedger.json';
+import Centuari from '../abi/Centuari.json';
+import BondFactory from '../abi/CentuariBondERC20Factory.json';
 
-export const LEND_POSITION_CREATED_EVENT = {
-  type: 'event',
-  name: 'LendPositionCreated',
-  inputs: [
-    { name: 'marketId', type: 'bytes32', indexed: true, internalType: 'bytes32' },
-    { name: 'lender', type: 'address', indexed: true, internalType: 'address' },
-    { name: 'bondToken', type: 'address', indexed: true, internalType: 'address' },
-    { name: 'cbtAmount', type: 'uint256', indexed: false, internalType: 'uint256' },
-    { name: 'principal', type: 'uint256', indexed: false, internalType: 'uint256' },
-    { name: 'rate', type: 'uint256', indexed: false, internalType: 'uint256' },
-  ],
-  anonymous: false,
-} as const;
+type AbiEntry = { readonly type: string; readonly name?: string };
 
-export const BORROW_POSITION_CREATED_EVENT = {
-  type: 'event',
-  name: 'BorrowPositionCreated',
-  inputs: [
-    { name: 'marketId', type: 'bytes32', indexed: true, internalType: 'bytes32' },
-    { name: 'borrower', type: 'address', indexed: true, internalType: 'address' },
-    { name: 'principal', type: 'uint256', indexed: false, internalType: 'uint256' },
-    { name: 'debt', type: 'uint256', indexed: false, internalType: 'uint256' },
-    { name: 'rate', type: 'uint256', indexed: false, internalType: 'uint256' },
-  ],
-  anonymous: false,
-} as const;
+const findEvent = (abi: readonly AbiEntry[], name: string): AbiEvent => {
+  const event = abi.find((e) => e.type === 'event' && e.name === name);
+  if (!event) {
+    throw new Error(
+      `Event "${name}" not found in synced ABI — sync-to-services.sh may be out of date.`,
+    );
+  }
+  return event as unknown as AbiEvent;
+};
 
-/**
- * Emitted by BalanceLedger.markCollateral / unmarkCollateral. The 5-param
- * shape is the canonical Phase 1 event after the P1b-explicit refactor
- * (writer + user + asset + used + flaggedAt). Settlement-engine parses these
- * from the receipt of its own `Settlement.settleMatches` tx and DELETEs the
- * matching `pending_collateral_flags` rows (Phase 3 eager queue cleanup).
- */
-export const COLLATERAL_FLAG_SET_EVENT = {
-  type: 'event',
-  name: 'CollateralFlagSet',
-  inputs: [
-    { name: 'writer', type: 'address', indexed: true, internalType: 'address' },
-    { name: 'user', type: 'address', indexed: true, internalType: 'address' },
-    { name: 'asset', type: 'address', indexed: true, internalType: 'address' },
-    { name: 'used', type: 'bool', indexed: false, internalType: 'bool' },
-    { name: 'flaggedAt', type: 'uint64', indexed: false, internalType: 'uint64' },
-  ],
-  anonymous: false,
-} as const;
+export const BOND_TOKEN_CREATED_EVENT = findEvent(BondFactory, 'BondTokenCreated');
+export const LEND_POSITION_CREATED_EVENT = findEvent(Centuari, 'LendPositionCreated');
+export const BORROW_POSITION_CREATED_EVENT = findEvent(Centuari, 'BorrowPositionCreated');
+export const COLLATERAL_FLAG_SET_EVENT = findEvent(BalanceLedger, 'CollateralFlagSet');
 
 export const SETTLEMENT_EVENT_ABIS = [
   BOND_TOKEN_CREATED_EVENT,

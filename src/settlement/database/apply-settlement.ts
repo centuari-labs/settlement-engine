@@ -308,10 +308,18 @@ const clearPendingCollateralFlagsFromReceipt = async (
         topics: log.topics,
       });
       if (decoded.eventName !== 'CollateralFlagSet') continue;
+      // Narrow `decoded.args`: event ABIs are now JSON-imported (synced from
+      // smart-contract-revamp) and viem can't infer literal field types from
+      // a wide AbiEvent.
+      const args = decoded.args as unknown as {
+        user: Address;
+        asset: Address;
+        used: boolean;
+      };
       events.push({
-        user: decoded.args.user as Address,
-        asset: decoded.args.asset as Address,
-        used: decoded.args.used as boolean,
+        user: args.user,
+        asset: args.asset,
+        used: args.used,
         logIndex: Number(log.logIndex ?? -1),
       });
     } catch (err) {

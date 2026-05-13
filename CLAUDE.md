@@ -29,7 +29,7 @@ src/
 │   ├── client.ts                     # Singleton Redis client
 │   └── settlementMatchConsumer.ts    # Stream reading, entry parsing, pending recovery
 ├── settlement/
-│   ├── abi.ts                        # Settlement contract ABI definition
+│   ├── abi.ts                        # Re-exports SETTLEMENT_CONTRACT_ABI from src/abi/Settlement.json (synced)
 │   ├── batchAccumulator.ts           # Hybrid batching (size + time triggers)
 │   ├── batchProcessor.ts             # Main polling loop with backoff
 │   ├── processBatch.ts               # Orchestrates: filter → settle → persist → ack

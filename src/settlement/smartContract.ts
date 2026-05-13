@@ -542,13 +542,24 @@ const parseReceiptLogs = (logs: readonly ReceiptLog[]): {
         topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
       });
       if (decoded.eventName === 'BondTokenCreated') {
+        // Narrow `decoded.args` once: SETTLEMENT_CONTRACT_ABI / event ABIs are
+        // now JSON-imported (synced from smart-contract-revamp) and viem can't
+        // infer literal field types from a wide AbiEvent.
+        const args = decoded.args as unknown as {
+          marketId: string;
+          bondToken: string;
+          loanToken: string;
+          maturity: bigint;
+          name: string;
+          symbol: string;
+        };
         bondTokenEvents.push({
-          marketId: decoded.args.marketId as string,
-          bondToken: (decoded.args.bondToken as string).toLowerCase(),
-          loanToken: (decoded.args.loanToken as string).toLowerCase(),
-          maturity: decoded.args.maturity,
-          name: decoded.args.name,
-          symbol: decoded.args.symbol,
+          marketId: args.marketId,
+          bondToken: args.bondToken.toLowerCase(),
+          loanToken: args.loanToken.toLowerCase(),
+          maturity: args.maturity,
+          name: args.name,
+          symbol: args.symbol,
           logIndex,
         });
       }
@@ -563,13 +574,21 @@ const parseReceiptLogs = (logs: readonly ReceiptLog[]): {
         topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
       });
       if (decoded.eventName === 'LendPositionCreated') {
+        const args = decoded.args as unknown as {
+          marketId: string;
+          lender: string;
+          bondToken: string;
+          cbtAmount: bigint;
+          principal: bigint;
+          rate: bigint;
+        };
         lendPositionEvents.push({
-          marketId: decoded.args.marketId as string,
-          lender: (decoded.args.lender as string).toLowerCase(),
-          bondToken: (decoded.args.bondToken as string).toLowerCase(),
-          cbtAmount: decoded.args.cbtAmount,
-          principal: decoded.args.principal,
-          rate: decoded.args.rate,
+          marketId: args.marketId,
+          lender: args.lender.toLowerCase(),
+          bondToken: args.bondToken.toLowerCase(),
+          cbtAmount: args.cbtAmount,
+          principal: args.principal,
+          rate: args.rate,
           logIndex,
         });
       }
@@ -584,12 +603,19 @@ const parseReceiptLogs = (logs: readonly ReceiptLog[]): {
         topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
       });
       if (decoded.eventName === 'BorrowPositionCreated') {
+        const args = decoded.args as unknown as {
+          marketId: string;
+          borrower: string;
+          principal: bigint;
+          debt: bigint;
+          rate: bigint;
+        };
         borrowPositionEvents.push({
-          marketId: decoded.args.marketId as string,
-          borrower: (decoded.args.borrower as string).toLowerCase(),
-          principal: decoded.args.principal,
-          debt: decoded.args.debt,
-          rate: decoded.args.rate,
+          marketId: args.marketId,
+          borrower: args.borrower.toLowerCase(),
+          principal: args.principal,
+          debt: args.debt,
+          rate: args.rate,
           logIndex,
         });
       }
