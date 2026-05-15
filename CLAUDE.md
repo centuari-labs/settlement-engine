@@ -81,7 +81,7 @@ After `Settlement.settle()` confirms on-chain, [`applySettlementResult`](src/set
 
 **Match-time counterpart** lives in [matching-engine/src/services/db/postgres-db-client.ts:216-254](../matching-engine/src/services/db/postgres-db-client.ts). The decrement decomposition mirrors that increment exactly; any drift between the two sites breaks lock-release accounting.
 
-For the planned reconciliation job that sweeps stuck `PENDING` rows, see [../smart-contract-revamp/docs/hub-only-launch-plan.md](../smart-contract-revamp/docs/hub-only-launch-plan.md) Track C2 (deep reference in [archive/order-lock-lifecycle-followups.md](../smart-contract-revamp/docs/archive/order-lock-lifecycle-followups.md)).
+For the planned reconciliation job that sweeps stuck `PENDING` rows, see [../dev-docs/architecture-html/launches/hub-only.html](../dev-docs/architecture-html/launches/hub-only.html) Track C2 (deep reference in [archive/order-lock-lifecycle-followups.md](../smart-contract-revamp/docs/archive/order-lock-lifecycle-followups.md)).
 
 ### Batch Strategy
 
