@@ -36,9 +36,9 @@ You can create a `.env` file in the project root and set these values as needed.
 
 ### Scripts
 
-- `npm run dev`: Run the settlement engine in watch mode using `ts-node-dev`.
-- `npm run build`: Compile TypeScript to JavaScript in `dist/`.
-- `npm run start`: Run the compiled service from `dist/index.js`.
+- `pnpm run dev`: Run the settlement engine in watch mode using `ts-node-dev`.
+- `pnpm run build`: Compile TypeScript to JavaScript in `dist/`.
+- `pnpm run start`: Run the compiled service from `dist/index.js`.
 
 ### Running locally
 
@@ -46,13 +46,13 @@ You can create a `.env` file in the project root and set these values as needed.
 2. Install dependencies:
 
 ```bash
-npm install
+pnpm install
 ```
 
 3. Start the service in development mode:
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 The service will create the consumer group for `settlement:matches` if it does not

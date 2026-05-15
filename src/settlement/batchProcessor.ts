@@ -12,8 +12,6 @@ import {
   BatchProcessingError,
 } from './processBatch';
 import {
-  findUnprocessedSettlementBatches,
-  retryEventProcessing,
   unlockFailedMatches,
   recordFailedMatches,
   restoreOrdersForFailedMatches,
@@ -61,7 +59,6 @@ export class BatchProcessor {
   private isRunning = false;
   private pollIntervalId: NodeJS.Timeout | null = null;
   private pendingReclaimIntervalId: NodeJS.Timeout | null = null;
-  private eventRecoveryIntervalId: NodeJS.Timeout | null = null;
   private processingPromise: Promise<void> | null = null;
   private consecutiveFailures = 0;
   private nextRetryAt = 0;
@@ -128,12 +125,6 @@ export class BatchProcessor {
       void this.reclaimPending();
     }, this.config.pendingReclaimIntervalMs);
 
-    // Start event recovery timer (retries failed event processing every 60s)
-    const EVENT_RECOVERY_INTERVAL_MS = 60_000;
-    this.eventRecoveryIntervalId = setInterval(() => {
-      void this.recoverUnprocessedEvents();
-    }, EVENT_RECOVERY_INTERVAL_MS);
-
     // Do an initial poll immediately
     void this.poll();
   }
@@ -163,12 +154,6 @@ export class BatchProcessor {
     if (this.pendingReclaimIntervalId) {
       clearInterval(this.pendingReclaimIntervalId);
       this.pendingReclaimIntervalId = null;
-    }
-
-    // Clear event recovery interval
-    if (this.eventRecoveryIntervalId) {
-      clearInterval(this.eventRecoveryIntervalId);
-      this.eventRecoveryIntervalId = null;
     }
 
     // Wait for any in-flight processing to complete
@@ -431,50 +416,4 @@ export class BatchProcessor {
     }
   }
 
-  /**
-   * Recover unprocessed settlement events.
-   * Finds settlement batches where event processing failed (events_processed = false)
-   * and retries processing their stored raw events.
-   */
-  private async recoverUnprocessedEvents(): Promise<void> {
-    if (!this.isRunning) {
-      return;
-    }
-
-    try {
-      const unprocessed = await findUnprocessedSettlementBatches(10);
-
-      if (unprocessed.length === 0) {
-        return;
-      }
-
-      logger.info(
-        { component: 'batch-processor', count: unprocessed.length },
-        'Found unprocessed settlement batches, retrying event processing',
-      );
-
-      for (const batch of unprocessed) {
-        try {
-          await retryEventProcessing(batch.id, batch.rawEvents, this.config);
-
-          logger.info(
-            { component: 'batch-processor', batchId: batch.id },
-            'Successfully recovered events for batch',
-          );
-        } catch (error) {
-          logger.error(
-            {
-              component: 'batch-processor',
-              batchId: batch.id,
-              err: error instanceof Error ? error.message : String(error),
-            },
-            'Failed to recover events for batch',
-          );
-          // Continue with other batches — don't let one failure block the rest
-        }
-      }
-    } catch (error) {
-      logger.error({ component: 'batch-processor', err: error }, 'Error in event recovery loop');
-    }
-  }
 }

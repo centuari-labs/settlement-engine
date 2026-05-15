@@ -305,6 +305,119 @@ describe('smartContract', () => {
       expect(result.settledMatchIds).toEqual([matches[0].matchId]);
     });
 
+    describe('collateralAssets encoding (Phase 3)', () => {
+      const settleAndCaptureContractMatches = async (
+        matches: ReturnType<typeof createMatch>[],
+        collateralAssetsByBorrower?: ReadonlyMap<string, readonly `0x${string}`[]>,
+      ) => {
+        const config = createTestAppConfig();
+        mockWalletClient.writeContract.mockResolvedValue(
+          '0xabc' as `0x${string}`,
+        );
+        mockPublicClient.waitForTransactionReceipt.mockResolvedValue({
+          status: 'success',
+          transactionHash: '0xabc',
+          blockNumber: 100n,
+          gasUsed: 50000n,
+          logs: [],
+        });
+        mockPublicClient.getBlock.mockResolvedValue({
+          timestamp: 1700000000n,
+        });
+
+        await smartContractModule.settleBatch({
+          matches,
+          config,
+          collateralAssetsByBorrower,
+        });
+
+        const writeArgs = mockWalletClient.writeContract.mock.calls[0]![0];
+        return writeArgs.args[0] as {
+          borrower: `0x${string}`;
+          collateralAssets: `0x${string}`[];
+        }[];
+      };
+
+      it('encodes empty collateralAssets when no map is provided', async () => {
+        const matches = [createMatch()];
+        const contractMatches = await settleAndCaptureContractMatches(matches);
+        expect(contractMatches[0]!.collateralAssets).toEqual([]);
+      });
+
+      it('encodes empty collateralAssets when the borrower has no queued flags', async () => {
+        const matches = [
+          createMatch({
+            borrowerWallet: '0xbbbb000000000000000000000000000000000001',
+          }),
+        ];
+        const lookup = new Map<string, readonly `0x${string}`[]>();
+        const contractMatches = await settleAndCaptureContractMatches(
+          matches,
+          lookup,
+        );
+        expect(contractMatches[0]!.collateralAssets).toEqual([]);
+      });
+
+      it('encodes the borrower queued assets via lowercase lookup', async () => {
+        const borrower = '0xBBBB000000000000000000000000000000000001';
+        const btc = '0xcccc000000000000000000000000000000000003' as `0x${string}`;
+        const eth = '0xdddd000000000000000000000000000000000004' as `0x${string}`;
+
+        const matches = [createMatch({ borrowerWallet: borrower })];
+        const lookup = new Map<string, readonly `0x${string}`[]>([
+          [borrower.toLowerCase(), [btc, eth]],
+        ]);
+
+        const contractMatches = await settleAndCaptureContractMatches(
+          matches,
+          lookup,
+        );
+
+        expect(contractMatches[0]!.collateralAssets).toEqual([btc, eth]);
+      });
+
+      it('keeps per-borrower arrays distinct in a multi-borrower batch', async () => {
+        const borrowerA = '0xaaaa000000000000000000000000000000000001';
+        const borrowerB = '0xbbbb000000000000000000000000000000000002';
+        const assetX = '0xcccc000000000000000000000000000000000003' as `0x${string}`;
+        const assetY = '0xdddd000000000000000000000000000000000004' as `0x${string}`;
+
+        const matches = [
+          createMatch({ matchId: '00000000-0000-0000-0000-000000000001', borrowerWallet: borrowerA }),
+          createMatch({ matchId: '00000000-0000-0000-0000-000000000002', borrowerWallet: borrowerB }),
+        ];
+        const lookup = new Map<string, readonly `0x${string}`[]>([
+          [borrowerA.toLowerCase(), [assetX]],
+          [borrowerB.toLowerCase(), [assetY]],
+        ]);
+
+        const contractMatches = await settleAndCaptureContractMatches(
+          matches,
+          lookup,
+        );
+
+        expect(contractMatches[0]!.collateralAssets).toEqual([assetX]);
+        expect(contractMatches[1]!.collateralAssets).toEqual([assetY]);
+      });
+
+      it('de-dupes asset entries defensively even if the caller passes duplicates', async () => {
+        const borrower = '0xbbbb000000000000000000000000000000000001';
+        const btc = '0xcccc000000000000000000000000000000000003' as `0x${string}`;
+
+        const matches = [createMatch({ borrowerWallet: borrower })];
+        const lookup = new Map<string, readonly `0x${string}`[]>([
+          [borrower.toLowerCase(), [btc, btc]],
+        ]);
+
+        const contractMatches = await settleAndCaptureContractMatches(
+          matches,
+          lookup,
+        );
+
+        expect(contractMatches[0]!.collateralAssets).toEqual([btc]);
+      });
+    });
+
     it('should throw retryable error when transaction is reverted', async () => {
       const config = createTestAppConfig();
       const matches = [createMatch()];

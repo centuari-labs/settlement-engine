@@ -6,8 +6,6 @@ import {
   unlockFailedMatches,
   recordFailedMatches,
   restoreOrdersForFailedMatches,
-  findUnprocessedSettlementBatches,
-  retryEventProcessing,
 } from '../database';
 import { createMatch } from '../../tests/helpers/testFixtures';
 import {
@@ -30,8 +28,6 @@ const mockProcessSettlementBatch = processSettlementBatch as jest.MockedFunction
 const mockUnlockFailedMatches = unlockFailedMatches as jest.MockedFunction<typeof unlockFailedMatches>;
 const mockRecordFailedMatches = recordFailedMatches as jest.MockedFunction<typeof recordFailedMatches>;
 const mockRestoreOrdersForFailedMatches = restoreOrdersForFailedMatches as jest.MockedFunction<typeof restoreOrdersForFailedMatches>;
-const mockFindUnprocessedSettlementBatches = findUnprocessedSettlementBatches as jest.MockedFunction<typeof findUnprocessedSettlementBatches>;
-const mockRetryEventProcessing = retryEventProcessing as jest.MockedFunction<typeof retryEventProcessing>;
 
 /**
  * Unit tests for BatchProcessor using a real Redis instance.
@@ -55,8 +51,6 @@ describe('BatchProcessor', () => {
     mockUnlockFailedMatches.mockResolvedValue(undefined);
     mockRecordFailedMatches.mockResolvedValue(undefined);
     mockRestoreOrdersForFailedMatches.mockResolvedValue(undefined);
-    mockFindUnprocessedSettlementBatches.mockResolvedValue([]);
-    mockRetryEventProcessing.mockResolvedValue(undefined);
 
     // Create isolated test environment with unique stream/group names
     config = createIsolatedTestConfig({
@@ -1095,32 +1089,6 @@ describe('BatchProcessor', () => {
     }, 15000);
   });
 
-  describe('event recovery timer', () => {
-    it('should not crash when event recovery finds unprocessed batches', async () => {
-      // findUnprocessedSettlementBatches returns empty (default mock)
-      mockFindUnprocessedSettlementBatches.mockResolvedValue([]);
-
-      processor.start();
-
-      // Let it run for a bit — no errors should be thrown
-      await wait(200);
-
-      // Processor should still be running without errors
-      expect(processor).toBeDefined();
-
-      await processor.stop();
-    }, 15000);
-
-    it('should clear event recovery interval on stop', async () => {
-      mockFindUnprocessedSettlementBatches.mockResolvedValue([]);
-
-      processor.start();
-
-      // Let it initialize
-      await wait(100);
-
-      // Stop should resolve cleanly without interval leaks
-      await expect(processor.stop()).resolves.not.toThrow();
-    }, 15000);
-  });
+  // The events_processed recovery loop was removed in Phase A.1. Recovery is now
+  // delegated to the indexer-v3 tail via applyOnChainEffect idempotency stamps.
 });

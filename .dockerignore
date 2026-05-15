@@ -36,4 +36,3 @@ jest.config.js
 # Misc
 .DS_Store
 *.log
-pnpm-lock.yaml

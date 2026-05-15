@@ -3,27 +3,24 @@ export {
   withTransaction,
   mapPostgresErrorToDatabaseError,
   executeWithRetry,
-  settlementBatchStatusSchema,
 } from './connection';
 
-export type {
-  DatabaseError,
-  PersistSettlementResultsOptions,
-  SettlementBatchStatus,
-  SettlementBatch,
-  SettlementItem,
-  RawSettlementEvents,
-} from './connection';
+export type { DatabaseError } from './connection';
+
+export { applySettlementResult } from './apply-settlement';
 
 export {
-  persistSettlementResults,
-  processSettlementEvents,
-} from './persistence';
+  readForBorrowers as readPendingCollateralFlagsForBorrowers,
+  clearForEvent as clearPendingCollateralFlagForEvent,
+} from './pending-collateral-flags';
 
 export {
-  findUnprocessedSettlementBatches,
-  retryEventProcessing,
   unlockFailedMatches,
   recordFailedMatches,
   restoreOrdersForFailedMatches,
-} from './recovery';
+} from './order-failure';
+
+export {
+  applyMatchSettlementWriteback,
+  writebackSettledMatches,
+} from './lock-release';

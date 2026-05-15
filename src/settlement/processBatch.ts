@@ -1,13 +1,21 @@
 import type Redis from 'ioredis';
+import type { Address } from 'viem';
 import type { MatchWithMeta } from '../redis/settlementMatchConsumer';
 import type { AppConfig } from '../config';
 import { logger } from '../logger';
 import {
   settleBatch,
   filterAlreadySettledMatches,
+  getPublicClient,
   type SettlementError,
 } from './smartContract';
-import { persistSettlementResults, type DatabaseError } from './database';
+import {
+  applySettlementResult,
+  getPool,
+  readPendingCollateralFlagsForBorrowers,
+  type DatabaseError,
+} from './database';
+import { loadConfig } from '../config';
 import type { NonceManager } from './nonceManager';
 
 /**
@@ -148,6 +156,54 @@ export const processSettlementBatch = async (
     return;
   }
 
+  // Step 0.5: Read `pending_collateral_flags` for the distinct borrowers in
+  // this batch. The result map drives `MatchData.collateralAssets` per match
+  // inside `settleBatch` → `transformMatchToContractFormat`. Reading here
+  // (immediately before submitting the on-chain tx) keeps the race window
+  // between user unflag and settle to ~tens of milliseconds — the queue
+  // truly represents the user's latest intent at submit time. The match
+  // payload's plumbing-only `borrowerCollateralAssets` (P2) is intentionally
+  // ignored: a stale order-time snapshot would defeat the unflag race fix.
+  let collateralAssetsByBorrower: Map<string, readonly Address[]> = new Map();
+  try {
+    const distinctBorrowers = Array.from(
+      new Set(
+        unsettled.map((m) => (m.payload.borrowerWallet as Address).toLowerCase()),
+      ),
+    ) as Address[];
+    collateralAssetsByBorrower = await readPendingCollateralFlagsForBorrowers(
+      getPool(),
+      distinctBorrowers,
+    );
+    if (collateralAssetsByBorrower.size > 0) {
+      logger.info(
+        {
+          component: 'process-settlement-batch',
+          borrowersWithFlags: collateralAssetsByBorrower.size,
+          totalAssets: Array.from(collateralAssetsByBorrower.values()).reduce(
+            (sum, arr) => sum + arr.length,
+            0,
+          ),
+        },
+        'Read pending collateral flags for batch',
+      );
+    }
+  } catch (error) {
+    // Reading the queue is best-effort: if it fails we still settle the
+    // batch with empty `collateralAssets` arrays. The user's queued flags
+    // will land at the next settlement (queue rows persist) or via a
+    // direct-caller `CollateralManager.flag(asset)` call. Aborting the
+    // entire batch over a transient queue read is the wrong tradeoff.
+    logger.error(
+      {
+        component: 'process-settlement-batch',
+        err: (error as Error).message,
+        borrowerCount: unsettled.length,
+      },
+      'Failed to read pending_collateral_flags — settling without collateral encoding',
+    );
+  }
+
   let settlementResult;
   try {
     // Step 1: Call smart contract to settle the batch
@@ -156,6 +212,7 @@ export const processSettlementBatch = async (
       matches: unsettled.map((m) => m.payload),
       config,
       nonceManager: context.nonceManager,
+      collateralAssetsByBorrower,
     });
     const duration = Date.now() - startTime;
 
@@ -195,33 +252,33 @@ export const processSettlementBatch = async (
     );
   }
 
-  // Step 2: Persist settlement results to database (two-phase).
-  // Phase 1 inserts settlement records + raw events (must succeed).
-  // Phase 2 processes events into positions (can fail — recovery loop retries).
-  // Build a map of matchId → Match payload so the persistence layer can
-  // upsert match rows before inserting settlement_items (avoids FK race
-  // condition with the DB writer).
-  const matchPayloads = new Map(
-    unsettled.map((m) => [m.payload.matchId, m.payload]),
-  );
-
+  // Step 2: Eager-write the parsed events to indexer-v3's schema. Each event
+  // is committed in its own pg tx with applied_by_* stamps. If this fails
+  // mid-batch the on-chain tx is already final, so we don't ACK Redis —
+  // retry will no-op the already-stamped rows via their stamps, and the
+  // indexer-v3 tail is a secondary safety net for any gaps we leave behind.
   try {
     const startTime = Date.now();
-    await persistSettlementResults({
-      results: [settlementResult],
-      matchPayloads,
-      config: config!,
-    });
+    // The cached viem public client is typed narrowly by createPublicClient;
+    // applyOnChainEffect declares the general PublicClient interface. Cast
+    // is safe because we always pass a pre-fetched receipt — client is never
+    // dereferenced by the helper in this path.
+    const publicClient = getPublicClient(
+      config ?? loadConfig(),
+    ) as unknown as import('viem').PublicClient;
+    await applySettlementResult(
+      getPool(),
+      publicClient,
+      settlementResult,
+      unsettled.map((m) => m.payload),
+    );
     const duration = Date.now() - startTime;
 
     logger.info(
       { component: 'process-settlement-batch', duration, matchCount: unsettled.length },
-      'Database persistence successful',
+      'Applied settlement result to indexer-v3 schema',
     );
   } catch (error) {
-    // Phase 1 failed — settlement records not committed.
-    // This is critical: on-chain settlement succeeded but we can't persist the record.
-    // Do NOT ACK from Redis so the entries can be retried.
     const dbError = error as DatabaseError;
     const isRetryable =
       dbError.retryable !== undefined ? dbError.retryable : true;
@@ -229,16 +286,16 @@ export const processSettlementBatch = async (
     logger.error(
       {
         component: 'process-settlement-batch',
-        err: dbError.message,
+        err: dbError.message ?? (error as Error).message,
         code: dbError.code,
         retryable: isRetryable,
         matchCount: unsettled.length,
       },
-      'Database persistence Phase 1 failed',
+      'Settlement apply to indexer-v3 schema failed',
     );
 
     throw new BatchProcessingError(
-      `Database persistence failed: ${dbError.message}`,
+      `Settlement apply failed: ${dbError.message ?? (error as Error).message}`,
       isRetryable,
       error,
     );

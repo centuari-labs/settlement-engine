@@ -10,6 +10,8 @@ import {
   type Chain,
   defineChain,
   decodeEventLog,
+  type PublicClient,
+  type TransactionReceipt,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { loadConfig, type AppConfig } from '../config';
@@ -34,6 +36,7 @@ export interface ParsedBondToken {
   readonly maturity: bigint;
   readonly name: string;
   readonly symbol: string;
+  readonly logIndex: number;
 }
 
 /**
@@ -46,6 +49,7 @@ export interface ParsedLendPosition {
   readonly cbtAmount: bigint;
   readonly principal: bigint;
   readonly rate: bigint;
+  readonly logIndex: number;
 }
 
 /**
@@ -57,6 +61,7 @@ export interface ParsedBorrowPosition {
   readonly principal: bigint;
   readonly debt: bigint;
   readonly rate: bigint;
+  readonly logIndex: number;
 }
 
 /**
@@ -67,6 +72,12 @@ export interface SettlementResult {
    * Transaction hash of the settlement transaction.
    */
   readonly transactionHash: string;
+  /**
+   * Block hash of the block where the transaction was mined. Used as part of
+   * the idempotency stamp written alongside eager DB mutations via
+   * applyOnChainEffect.
+   */
+  readonly blockHash: Hash;
   /**
    * Block number where the transaction was mined.
    */
@@ -95,6 +106,13 @@ export interface SettlementResult {
    * Parsed BorrowPositionCreated events from the settlement tx receipt.
    */
   readonly borrowPositionEvents: readonly ParsedBorrowPosition[];
+  /**
+   * Raw mined transaction receipt. Held here so downstream DB writers (via
+   * `applyOnChainEffect`) don't re-fetch it per event — settlement batches
+   * can emit N+M+K logs, and re-running `waitForTransactionReceipt` for each
+   * would be wasteful.
+   */
+  readonly receipt: TransactionReceipt;
 }
 
 /**
@@ -144,6 +162,19 @@ export interface SettleBatchOptions {
    * When provided, acquires and manages nonces for each transaction.
    */
   readonly nonceManager?: NonceManager;
+  /**
+   * Per-borrower lookup of pending collateral flag assets read from
+   * `pending_collateral_flags` at settle time (Phase 3 queue-driven encoder).
+   * Each match's `borrower` is keyed by lowercase address into this map; the
+   * resolved array is encoded into `MatchData.collateralAssets` so
+   * `Centuari.settleMatch` flags exactly the assets the user has currently
+   * queued. Absent map / absent borrower entries default to `[]` — the
+   * settle call still goes through, just with no on-chain flag mutation.
+   * The match payload's plumbing-only `borrowerCollateralAssets` (P2) is
+   * NOT used here — settlement reads the queue directly so the user's
+   * latest unflag wins over a stale order-time snapshot.
+   */
+  readonly collateralAssetsByBorrower?: ReadonlyMap<string, readonly Address[]>;
 }
 
 /**
@@ -197,16 +228,32 @@ const uuidToBytes32Direct = (uuid: string): Hash => {
  * Transforms a Match object to the contract's MatchData struct format.
  *
  * @param match - Match object to transform.
+ * @param collateralAssetsByBorrower - Optional per-borrower queue lookup
+ *   from Phase 3 (`pending_collateral_flags`). The key is the lowercased
+ *   borrower address. Missing entries resolve to `[]` so settle still goes
+ *   through with no on-chain flag mutation for that borrower.
  * @returns MatchData struct in the format expected by the contract.
  */
-const transformMatchToContractFormat = (match: Match) => {
+const transformMatchToContractFormat = (
+  match: Match,
+  collateralAssetsByBorrower?: ReadonlyMap<string, readonly Address[]>,
+) => {
+  const borrower = match.borrowerWallet as Address;
+  const queued = collateralAssetsByBorrower?.get(borrower.toLowerCase());
+  // Defensive de-dupe + lowercase: the repo already returns
+  // case-normalized + de-duped arrays, but this guards against future
+  // callers passing the map directly without going through the repo.
+  const collateralAssets = queued
+    ? Array.from(new Set(queued.map((a) => a.toLowerCase()))) as Address[]
+    : [];
+
   return {
     matchId: uuidToBytes32(match.matchId),
     marketId: uuidToBytes32Direct(match.marketId),
     lendOrderId: uuidToBytes32(match.lendOrderId),
     borrowOrderId: uuidToBytes32(match.borrowOrderId),
     lender: match.lenderWallet as Address,
-    borrower: match.borrowerWallet as Address,
+    borrower,
     matchedAmount: BigInt(match.matchedAmount),
     rate: BigInt(match.rate),
     loanToken: match.loanToken as Address,
@@ -217,6 +264,7 @@ const transformMatchToContractFormat = (match: Match) => {
     borrowerSettlementFee: BigInt(match.borrowerSettlementFeeAmount),
     makerFeeAmount: BigInt(match.makerFeeAmount),
     takerFeeAmount: BigInt(match.takerFeeAmount),
+    collateralAssets,
   };
 };
 
@@ -463,7 +511,13 @@ const getWalletClient = (config: AppConfig) => {
  * Parse settlement transaction receipt logs to extract BondTokenCreated,
  * LendPositionCreated, and BorrowPositionCreated events.
  */
-const parseReceiptLogs = (logs: readonly { topics: readonly `0x${string}`[]; data: `0x${string}` }[]): {
+type ReceiptLog = {
+  readonly topics: readonly `0x${string}`[];
+  readonly data: `0x${string}`;
+  readonly logIndex: number | null;
+};
+
+const parseReceiptLogs = (logs: readonly ReceiptLog[]): {
   bondTokenEvents: ParsedBondToken[];
   lendPositionEvents: ParsedLendPosition[];
   borrowPositionEvents: ParsedBorrowPosition[];
@@ -473,6 +527,14 @@ const parseReceiptLogs = (logs: readonly { topics: readonly `0x${string}`[]; dat
   const borrowPositionEvents: ParsedBorrowPosition[] = [];
 
   for (const log of logs) {
+    // logIndex is null on pending logs; settlement logs come from mined
+    // receipts, so this is defensive — skip unidentifiable logs rather than
+    // stamping a row with a null index.
+    if (log.logIndex === null) {
+      continue;
+    }
+    const logIndex = log.logIndex;
+
     try {
       const decoded = decodeEventLog({
         abi: [BOND_TOKEN_CREATED_EVENT],
@@ -480,13 +542,25 @@ const parseReceiptLogs = (logs: readonly { topics: readonly `0x${string}`[]; dat
         topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
       });
       if (decoded.eventName === 'BondTokenCreated') {
+        // Narrow `decoded.args` once: SETTLEMENT_CONTRACT_ABI / event ABIs are
+        // now JSON-imported (synced from smart-contract-revamp) and viem can't
+        // infer literal field types from a wide AbiEvent.
+        const args = decoded.args as unknown as {
+          marketId: string;
+          bondToken: string;
+          loanToken: string;
+          maturity: bigint;
+          name: string;
+          symbol: string;
+        };
         bondTokenEvents.push({
-          marketId: decoded.args.marketId as string,
-          bondToken: (decoded.args.bondToken as string).toLowerCase(),
-          loanToken: (decoded.args.loanToken as string).toLowerCase(),
-          maturity: decoded.args.maturity,
-          name: decoded.args.name,
-          symbol: decoded.args.symbol,
+          marketId: args.marketId,
+          bondToken: args.bondToken.toLowerCase(),
+          loanToken: args.loanToken.toLowerCase(),
+          maturity: args.maturity,
+          name: args.name,
+          symbol: args.symbol,
+          logIndex,
         });
       }
     } catch {
@@ -500,13 +574,22 @@ const parseReceiptLogs = (logs: readonly { topics: readonly `0x${string}`[]; dat
         topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
       });
       if (decoded.eventName === 'LendPositionCreated') {
+        const args = decoded.args as unknown as {
+          marketId: string;
+          lender: string;
+          bondToken: string;
+          cbtAmount: bigint;
+          principal: bigint;
+          rate: bigint;
+        };
         lendPositionEvents.push({
-          marketId: decoded.args.marketId as string,
-          lender: (decoded.args.lender as string).toLowerCase(),
-          bondToken: (decoded.args.bondToken as string).toLowerCase(),
-          cbtAmount: decoded.args.cbtAmount,
-          principal: decoded.args.principal,
-          rate: decoded.args.rate,
+          marketId: args.marketId,
+          lender: args.lender.toLowerCase(),
+          bondToken: args.bondToken.toLowerCase(),
+          cbtAmount: args.cbtAmount,
+          principal: args.principal,
+          rate: args.rate,
+          logIndex,
         });
       }
     } catch {
@@ -520,12 +603,20 @@ const parseReceiptLogs = (logs: readonly { topics: readonly `0x${string}`[]; dat
         topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
       });
       if (decoded.eventName === 'BorrowPositionCreated') {
+        const args = decoded.args as unknown as {
+          marketId: string;
+          borrower: string;
+          principal: bigint;
+          debt: bigint;
+          rate: bigint;
+        };
         borrowPositionEvents.push({
-          marketId: decoded.args.marketId as string,
-          borrower: (decoded.args.borrower as string).toLowerCase(),
-          principal: decoded.args.principal,
-          debt: decoded.args.debt,
-          rate: decoded.args.rate,
+          marketId: args.marketId,
+          borrower: args.borrower.toLowerCase(),
+          principal: args.principal,
+          debt: args.debt,
+          rate: args.rate,
+          logIndex,
         });
       }
     } catch {
@@ -616,6 +707,7 @@ export const settleBatch = async (
     retryDelayMs = 1000,
     config = loadConfig(),
     nonceManager,
+    collateralAssetsByBorrower,
   } = options;
 
   if (matches.length === 0) {
@@ -632,8 +724,12 @@ export const settleBatch = async (
   const walletClient = getWalletClient(config);
   const account = walletClient.account!;
 
-  // Transform matches to contract format
-  const contractMatches = matches.map(transformMatchToContractFormat);
+  // Transform matches to contract format. Per-borrower `collateralAssets`
+  // are filled from the upstream `pending_collateral_flags` lookup (Phase 3
+  // queue-driven encoder); missing entries default to `[]`.
+  const contractMatches = matches.map((m) =>
+    transformMatchToContractFormat(m, collateralAssetsByBorrower),
+  );
 
   logger.info(
     {
@@ -718,6 +814,7 @@ export const settleBatch = async (
 
     return {
       transactionHash: receipt.transactionHash,
+      blockHash: receipt.blockHash,
       blockNumber,
       gasUsed,
       timestamp,
@@ -725,6 +822,7 @@ export const settleBatch = async (
       bondTokenEvents,
       lendPositionEvents,
       borrowPositionEvents,
+      receipt,
     };
   } catch (error) {
     // Handle nonce failure before mapping the error

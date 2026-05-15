@@ -8,7 +8,7 @@ import {
 import { getRedisClient, closeRedisClient } from '../../redis/client';
 import { cleanupTestStreams } from '../../tests/helpers/redisTestClient';
 import { createTestConfig } from '../../tests/helpers/testConfig';
-import { persistSettlementResults } from '../database';
+import { applySettlementResult } from '../database';
 import { filterAlreadySettledMatches, settleBatch } from '../smartContract';
 import { setupMockSettleBatch, getMockSettleBatch, setupMockSettleBatchError, createSettlementError } from '../../tests/helpers/mockSmartContract';
 import { logger } from '../../logger';
@@ -17,8 +17,8 @@ import { logger } from '../../logger';
 jest.mock('../database');
 
 const mockSettleBatch = getMockSettleBatch();
-const mockPersistSettlementResults = persistSettlementResults as jest.MockedFunction<
-  typeof persistSettlementResults
+const mockApplySettlementResult = applySettlementResult as jest.MockedFunction<
+  typeof applySettlementResult
 >;
 
 /**
@@ -77,7 +77,7 @@ describe('processSettlementBatch', () => {
 
     // Set up default successful mocks using the mock helper
     setupMockSettleBatch(mockSettleBatch);
-    mockPersistSettlementResults.mockResolvedValue(undefined);
+    mockApplySettlementResult.mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
@@ -583,7 +583,7 @@ describe('processSettlementBatch', () => {
 
       // settleBatch succeeds, but database persistence fails
       setupMockSettleBatch(mockSettleBatch);
-      mockPersistSettlementResults.mockRejectedValueOnce({
+      mockApplySettlementResult.mockRejectedValueOnce({
         message: 'unique violation',
         code: '23505',
         retryable: false,

@@ -1,50 +1,19 @@
 import type { Match } from '../../schemas/match';
 import { logger } from '../../logger';
-import type { AppConfig } from '../../config';
-import { getPool, withTransaction } from './connection';
-import type { RawSettlementEvents } from './connection';
-import { processSettlementEvents } from './persistence';
+import { getPool } from './connection';
 
 /**
- * Find settlement batches where event processing has not completed.
- * Used by the recovery loop to retry failed event processing.
+ * Failure-path helpers for matching-engine reservation state.
  *
- * @param limit - Maximum number of unprocessed batches to fetch.
- * @returns Array of unprocessed batches with their raw events.
- */
-export const findUnprocessedSettlementBatches = async (
-  limit = 10,
-): Promise<{ id: string; rawEvents: RawSettlementEvents }[]> => {
-  const pool = getPool();
-  const result = await pool.query<{ id: string; raw_events: RawSettlementEvents }>(
-    `SELECT id, raw_events FROM settlement_batches WHERE events_processed = false AND raw_events IS NOT NULL ORDER BY created_at ASC LIMIT $1`,
-    [limit],
-  );
-
-  return result.rows.map((row) => ({
-    id: row.id,
-    rawEvents: typeof row.raw_events === 'string'
-      ? JSON.parse(row.raw_events)
-      : row.raw_events,
-  }));
-};
-
-/**
- * Retry event processing for a single unprocessed settlement batch.
+ * These touch legacy backend-v2 UUID tables (`portfolio.locked_amount`,
+ * `matches.settlement_status`, `orders`) and are invoked only when a batch
+ * hits a non-retryable smart-contract error. They stay in place until
+ * Phase B retires matching-engine's reservation model; Phase A does not
+ * own this state.
  *
- * @param batchId - Settlement batch ID.
- * @param rawEvents - Raw events to process.
- * @throws Error if event processing fails.
+ * Extracted verbatim from the deleted `recovery.ts` — only the
+ * `events_processed` loop went away.
  */
-export const retryEventProcessing = async (
-  batchId: string,
-  rawEvents: RawSettlementEvents,
-  config: AppConfig,
-): Promise<void> => {
-  await withTransaction(async (client) => {
-    await processSettlementEvents(client, batchId, rawEvents, config);
-  });
-};
 
 /**
  * Unlock portfolio locked_amount for matches that failed with a non-retryable error.

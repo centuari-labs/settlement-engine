@@ -1,4 +1,11 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Load .env.contracts FIRST so its keys win over .env (dotenv default
+// behavior: only sets unset keys, so first-wins gives priority to the
+// auto-generated file synced from smart-contract-revamp/bin/sync-to-services.sh).
+dotenv.config({ path: path.resolve(__dirname, '..', '.env.contracts') });
+dotenv.config();
 
 import { loadConfig } from './config';
 import { getRedisClient, closeRedisClient } from './redis/client';

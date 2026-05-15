@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Off-chain settlement engine service for Centuari, consuming matched orders from Redis streams.",
   "main": "dist/index.js",
+  "packageManager": "pnpm@10.29.2",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
@@ -23,11 +24,12 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@centuari-labs/on-chain-effects": "file:../on-chain-effects",
     "dotenv": "^16.4.5",
     "ioredis": "^5.4.1",
     "pg": "^8.13.0",
     "pino": "^9.0.0",
-    "viem": "^2.0.0",
+    "viem": "^2.21.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
