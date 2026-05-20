@@ -29,16 +29,20 @@ const mockedWithTransaction = withTransaction as jest.MockedFunction<
 const TX_HASH =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as const;
 
+const LENDER_WALLET = '0xaaaa000000000000000000000000000000000001';
+const BORROWER_WALLET = '0xbbbb000000000000000000000000000000000002';
+const LOAN_TOKEN = '0xcccc000000000000000000000000000000000003';
+
 const buildMatch = (overrides: Partial<Match> = {}): Match => ({
   matchId: '11111111-1111-1111-1111-111111111111',
   marketId: '22222222-2222-2222-2222-222222222222',
   lendOrderId: '33333333-3333-3333-3333-333333333333',
   borrowOrderId: '44444444-4444-4444-4444-444444444444',
-  lenderWallet: '0xaaaa000000000000000000000000000000000001',
-  borrowerWallet: '0xbbbb000000000000000000000000000000000002',
+  lenderWallet: LENDER_WALLET,
+  borrowerWallet: BORROWER_WALLET,
   matchedAmount: '1000000',
   rate: 500,
-  loanToken: '0xcccc000000000000000000000000000000000003',
+  loanToken: LOAN_TOKEN,
   maturity: 1_800_000_000,
   timestamp: 1_700_000_000_000,
   borrowerIsTaker: true,
@@ -49,20 +53,11 @@ const buildMatch = (overrides: Partial<Match> = {}): Match => ({
   ...overrides,
 });
 
-const buildSettledRow = (
-  overrides: { lender?: string; borrower?: string; asset?: string } = {},
-): { rows: Record<string, string>[]; rowCount: number } => ({
-  rows: [
-    {
-      lender_account_id:
-        overrides.lender ?? 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-      borrower_account_id:
-        overrides.borrower ?? 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
-      asset_id: overrides.asset ?? 'cccccccc-cccc-cccc-cccc-cccccccccccc',
-    },
-  ],
-  rowCount: 1,
-});
+// The matches UPDATE returns a non-zero rowCount only on the PENDING→SETTLED
+// transition; rows content is irrelevant (the decrements key off the match's
+// wallet/token, not the matches row).
+const SETTLED = { rows: [] as unknown[], rowCount: 1 };
+const NOT_SETTLED = { rows: [] as unknown[], rowCount: 0 };
 
 interface CapturedQuery {
   sql: string;
@@ -85,12 +80,8 @@ const fakeTx = (
 
 describe('applyMatchSettlementWriteback', () => {
   describe('happy path — PENDING → SETTLED transition', () => {
-    it('flips matches.settlement_status to SETTLED and decrements both portfolios', async () => {
-      const { tx, calls } = fakeTx([
-        buildSettledRow(),
-        { rows: [], rowCount: 1 },
-        { rows: [], rowCount: 1 },
-      ]);
+    it('flips matches.settlement_status to SETTLED and decrements both balances', async () => {
+      const { tx, calls } = fakeTx([SETTLED, { rows: [], rowCount: 1 }, { rows: [], rowCount: 1 }]);
 
       const transitioned = await applyMatchSettlementWriteback(
         tx,
@@ -110,21 +101,17 @@ describe('applyMatchSettlementWriteback', () => {
         TX_HASH,
       ]);
 
-      // Both subsequent calls are portfolio decrements.
-      expect(calls[1]!.sql).toMatch(/UPDATE portfolio/);
+      // Both subsequent calls are user_balance.in_orders decrements.
+      expect(calls[1]!.sql).toMatch(/UPDATE user_balance/);
+      expect(calls[1]!.sql).toMatch(/in_orders/);
       expect(calls[1]!.sql).toMatch(/GREATEST/);
-      expect(calls[2]!.sql).toMatch(/UPDATE portfolio/);
+      expect(calls[2]!.sql).toMatch(/UPDATE user_balance/);
+      expect(calls[2]!.sql).toMatch(/in_orders/);
       expect(calls[2]!.sql).toMatch(/GREATEST/);
     });
 
     it('decrements lender by matched_amount + lender_settlement_fee + lender_trade_fee (maker when borrowerIsTaker)', async () => {
-      const { tx, calls } = fakeTx([
-        buildSettledRow({
-          lender: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-        }),
-        { rows: [], rowCount: 1 },
-        { rows: [], rowCount: 1 },
-      ]);
+      const { tx, calls } = fakeTx([SETTLED, { rows: [], rowCount: 1 }, { rows: [], rowCount: 1 }]);
 
       await applyMatchSettlementWriteback(
         tx,
@@ -138,26 +125,20 @@ describe('applyMatchSettlementWriteback', () => {
         TX_HASH,
       );
 
-      // lender_account_id < borrower_account_id ('a...' < 'b...') so lender
-      // update fires first.
+      // lenderWallet < borrowerWallet ('0xaaaa…' < '0xbbbb…') so the lender
+      // update fires first. Params end with the BYTEA-keyed wallet + loan token.
       const lenderCall = calls[1]!;
       expect(lenderCall.params).toEqual([
         '1000000',
         '100',
         '300',
-        'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-        'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        LENDER_WALLET,
+        LOAN_TOKEN,
       ]);
     });
 
     it('decrements borrower by borrower_settlement_fee + borrower_trade_fee (taker when borrowerIsTaker)', async () => {
-      const { tx, calls } = fakeTx([
-        buildSettledRow({
-          borrower: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
-        }),
-        { rows: [], rowCount: 1 },
-        { rows: [], rowCount: 1 },
-      ]);
+      const { tx, calls } = fakeTx([SETTLED, { rows: [], rowCount: 1 }, { rows: [], rowCount: 1 }]);
 
       await applyMatchSettlementWriteback(
         tx,
@@ -174,17 +155,13 @@ describe('applyMatchSettlementWriteback', () => {
       expect(borrowerCall.params).toEqual([
         '100',
         '500',
-        'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
-        'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        BORROWER_WALLET,
+        LOAN_TOKEN,
       ]);
     });
 
     it('flips fee assignment when borrowerIsTaker is false (lender takes, pays takerFee)', async () => {
-      const { tx, calls } = fakeTx([
-        buildSettledRow(),
-        { rows: [], rowCount: 1 },
-        { rows: [], rowCount: 1 },
-      ]);
+      const { tx, calls } = fakeTx([SETTLED, { rows: [], rowCount: 1 }, { rows: [], rowCount: 1 }]);
 
       await applyMatchSettlementWriteback(
         tx,
@@ -199,48 +176,47 @@ describe('applyMatchSettlementWriteback', () => {
         TX_HASH,
       );
 
-      // Lender (first because lender < borrower) gets takerFee.
+      // Lender (first because lenderWallet < borrowerWallet) gets takerFee.
       expect(calls[1]!.params).toEqual([
         '1000000',
         '100',
         '500',
-        'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-        'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        LENDER_WALLET,
+        LOAN_TOKEN,
       ]);
       // Borrower (second) gets makerFee.
       expect(calls[2]!.params).toEqual([
         '100',
         '300',
-        'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
-        'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        BORROWER_WALLET,
+        LOAN_TOKEN,
       ]);
     });
 
-    it('orders portfolio updates by account_id ascending to match db-writer deadlock-avoidance', async () => {
-      // Inverted: lender id > borrower id. Borrower update should fire first.
-      const { tx, calls } = fakeTx([
-        buildSettledRow({
-          lender: 'ffffffff-ffff-ffff-ffff-ffffffffffff',
-          borrower: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-        }),
-        { rows: [], rowCount: 1 },
-        { rows: [], rowCount: 1 },
-      ]);
+    it('orders user_balance updates by wallet ascending to match db-writer deadlock-avoidance', async () => {
+      // Inverted: lenderWallet > borrowerWallet. Borrower update should fire first.
+      const highLender = '0xffff000000000000000000000000000000000009';
+      const lowBorrower = '0x1111000000000000000000000000000000000000';
+      const { tx, calls } = fakeTx([SETTLED, { rows: [], rowCount: 1 }, { rows: [], rowCount: 1 }]);
 
-      await applyMatchSettlementWriteback(tx, buildMatch(), TX_HASH);
+      await applyMatchSettlementWriteback(
+        tx,
+        buildMatch({ lenderWallet: highLender, borrowerWallet: lowBorrower }),
+        TX_HASH,
+      );
 
-      // calls[1] = borrower (smaller id), 4 params: feeAmount + tradeFee + accountId + assetId.
+      // calls[1] = borrower (smaller wallet), 4 params: fee + tradeFee + wallet + token.
       expect(calls[1]!.params).toHaveLength(4);
-      expect(calls[1]!.params[2]).toBe('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');
-      // calls[2] = lender, 5 params: matched + feeAmount + tradeFee + accountId + assetId.
+      expect(calls[1]!.params[2]).toBe(lowBorrower);
+      // calls[2] = lender, 5 params: matched + fee + tradeFee + wallet + token.
       expect(calls[2]!.params).toHaveLength(5);
-      expect(calls[2]!.params[3]).toBe('ffffffff-ffff-ffff-ffff-ffffffffffff');
+      expect(calls[2]!.params[3]).toBe(highLender);
     });
   });
 
   describe('idempotency — already SETTLED', () => {
-    it('returns false and skips portfolio updates when matches WHERE clause matches no rows', async () => {
-      const { tx, calls } = fakeTx([{ rows: [], rowCount: 0 }]);
+    it('returns false and skips balance updates when matches WHERE clause matches no rows', async () => {
+      const { tx, calls } = fakeTx([NOT_SETTLED]);
 
       const transitioned = await applyMatchSettlementWriteback(
         tx,
@@ -249,25 +225,21 @@ describe('applyMatchSettlementWriteback', () => {
       );
 
       expect(transitioned).toBe(false);
-      // Only the matches UPDATE was attempted; portfolio updates skipped.
+      // Only the matches UPDATE was attempted; balance updates skipped.
       expect(calls).toHaveLength(1);
       expect(calls[0]!.sql).toMatch(/UPDATE matches/);
     });
   });
 
-  describe('GREATEST guard against negative locked_amount', () => {
-    it('uses GREATEST(..., 0) on both portfolio updates', async () => {
-      const { tx, calls } = fakeTx([
-        buildSettledRow(),
-        { rows: [], rowCount: 1 },
-        { rows: [], rowCount: 1 },
-      ]);
+  describe('GREATEST guard against negative in_orders', () => {
+    it('uses GREATEST(..., 0) on both user_balance updates', async () => {
+      const { tx, calls } = fakeTx([SETTLED, { rows: [], rowCount: 1 }, { rows: [], rowCount: 1 }]);
 
       await applyMatchSettlementWriteback(tx, buildMatch(), TX_HASH);
 
-      expect(calls[1]!.sql).toMatch(/GREATEST\(\s*\n?\s*locked_amount\s*-\s*\(/);
+      expect(calls[1]!.sql).toMatch(/GREATEST\(\s*\n?\s*in_orders\s*-\s*\(/);
       expect(calls[1]!.sql).toMatch(/,\s*\n?\s*0\)/);
-      expect(calls[2]!.sql).toMatch(/GREATEST\(\s*\n?\s*locked_amount\s*-\s*\(/);
+      expect(calls[2]!.sql).toMatch(/GREATEST\(\s*\n?\s*in_orders\s*-\s*\(/);
       expect(calls[2]!.sql).toMatch(/,\s*\n?\s*0\)/);
     });
   });
@@ -298,11 +270,7 @@ describe('writebackSettledMatches', () => {
     mockedWithTransaction.mockImplementationOnce(
       async <T,>(fn: (client: PoolClient) => Promise<T>): Promise<T> => {
         let i = 0;
-        const responses = [
-          buildSettledRow(),
-          { rows: [], rowCount: 1 },
-          { rows: [], rowCount: 1 },
-        ];
+        const responses = [SETTLED, { rows: [], rowCount: 1 }, { rows: [], rowCount: 1 }];
         const tx = {
           query: jest.fn(async () => {
             const out = responses[i] ?? { rows: [], rowCount: 0 };
@@ -338,12 +306,8 @@ describe('writebackSettledMatches', () => {
         let qIdx = 0;
         const responses =
           idx === 0
-            ? [
-                buildSettledRow(),
-                { rows: [], rowCount: 1 },
-                { rows: [], rowCount: 1 },
-              ]
-            : [{ rows: [], rowCount: 0 }];
+            ? [SETTLED, { rows: [], rowCount: 1 }, { rows: [], rowCount: 1 }]
+            : [NOT_SETTLED];
         const tx = {
           query: jest.fn(async () => {
             const out = responses[qIdx] ?? { rows: [], rowCount: 0 };
@@ -380,11 +344,7 @@ describe('writebackSettledMatches', () => {
           throw new Error('pg exploded');
         }
         let qIdx = 0;
-        const responses = [
-          buildSettledRow(),
-          { rows: [], rowCount: 1 },
-          { rows: [], rowCount: 1 },
-        ];
+        const responses = [SETTLED, { rows: [], rowCount: 1 }, { rows: [], rowCount: 1 }];
         const tx = {
           query: jest.fn(async () => {
             const out = responses[qIdx] ?? { rows: [], rowCount: 0 };

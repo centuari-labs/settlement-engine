@@ -373,7 +373,7 @@ const clearPendingCollateralFlagsFromReceipt = async (
  *
  * Last, write back the order-lock lifecycle: flip every settled match from
  * `settlement_status='PENDING'` to `'SETTLED'` and decrement both sides of
- * `portfolio.locked_amount` by the exact amounts the db-writer added at
+ * `user_balance.in_orders` by the exact amounts the db-writer added at
  * match time. Idempotent on retry — see lock-release.ts for details. The
  * caller passes the original `Match[]` payloads so we have the per-side fee
  * decomposition; `result.settledMatchIds` filters the array down to the

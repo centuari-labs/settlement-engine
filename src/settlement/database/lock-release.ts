@@ -7,14 +7,12 @@ import { withTransaction } from './connection';
  * Settlement-engine writeback for the order-lock lifecycle.
  *
  * The db-writer (matching-engine codebase) increments
- * `portfolio.locked_amount` at MATCH time for both lender and borrower
- * — see matching-engine/src/services/db/postgres-db-client.ts:216-244
+ * `user_balance.in_orders` at MATCH time for both lender and borrower
+ * — see matching-engine/src/services/db/postgres-db-client.ts:251-271
  * for the exact decomposition that this file mirrors. Once the on-chain
- * settlement lands, the BalanceLedger.Debited event is observed by
- * indexer-v3 and `wallet_balance` drops; without a corresponding decrement
- * to `locked_amount`, the backend's available-balance formula
- * (`wallet - locked_amount - sum_open_orders`) under-counts the user's
- * available funds for as long as the lock is stale.
+ * settlement lands the reserved funds are spent, so without a corresponding
+ * decrement to `in_orders` the user's reservable balance stays under-counted
+ * for as long as the lock is stale.
  *
  * This helper runs alongside `applyOnChainEffect` (called from
  * `applySettlementResult` in apply-settlement.ts AFTER the per-event
@@ -26,12 +24,12 @@ import { withTransaction } from './connection';
  * For each settled match it:
  *   1. Marks `matches.settlement_status = 'SETTLED'` (idempotent — only
  *      transitions PENDING → SETTLED via the WHERE guard).
- *   2. Decrements both sides of `portfolio.locked_amount` by the exact
+ *   2. Decrements both sides of `user_balance.in_orders` by the exact
  *      amounts the db-writer added at match time.
  *
  * Idempotency: a retried settlement attempt on the same match is a natural
  * no-op because the `settlement_status` UPDATE returns no rows on the
- * second run, and we only fire the portfolio decrements when that UPDATE
+ * second run, and we only fire the in_orders decrements when that UPDATE
  * actually transitions a row. `GREATEST(..., 0)` is a belt-and-suspenders
  * guard for any case where a manual SQL fix could otherwise underflow.
  *
@@ -59,15 +57,13 @@ const splitTradeFees = (match: Match): {
 };
 
 /**
- * Mark a single match as SETTLED and decrement both sides' locked_amount.
+ * Mark a single match as SETTLED and decrement both sides' in_orders.
  * Returns true if the writeback transitioned the match from PENDING to
  * SETTLED, false if it was already settled (idempotent no-op).
  *
- * The decrement happens on the same `(account_id, asset_id)` row that
- * db-writer incremented; we read the IDs back from the matches row rather
- * than re-resolving (wallet → account_id, token → asset_id) because the
- * matches row is the canonical record and was already populated by
- * db-writer at match time.
+ * The decrement happens on the same `user_balance (user_address, asset)`
+ * row the db-writer incremented, keyed by the match's BYTEA-encoded wallet
+ * + loan token (both sides lock the loan token).
  */
 export const applyMatchSettlementWriteback = async (
   tx: PoolClient,
@@ -76,22 +72,17 @@ export const applyMatchSettlementWriteback = async (
 ): Promise<boolean> => {
   const { lenderTradeFee, borrowerTradeFee } = splitTradeFees(match);
 
-  // Step 1: Conditional UPDATE — only flips PENDING → SETTLED.
-  // RETURNING gives us the asset/account ids db-writer wrote at match time
-  // so we don't need a wallet→account or token→asset lookup here.
-  const settledRow = await tx.query<{
-    lender_account_id: string;
-    borrower_account_id: string;
-    asset_id: string;
-  }>(
+  // Step 1: Conditional UPDATE — only flips PENDING → SETTLED. rowCount is
+  // non-zero only on the transition, so the in_orders decrements below fire
+  // exactly once per match (idempotent across settlement retries).
+  const settledRow = await tx.query(
     `UPDATE matches
         SET settlement_status = 'SETTLED',
             settled_tx_hash = $2,
             settled_at = NOW(),
             updated_at = NOW()
       WHERE id = $1
-        AND settlement_status = 'PENDING'
-      RETURNING lender_account_id, borrower_account_id, asset_id`,
+        AND settlement_status = 'PENDING'`,
     [match.matchId, txHash],
   );
 
@@ -100,54 +91,47 @@ export const applyMatchSettlementWriteback = async (
     return false;
   }
 
-  const row = settledRow.rows[0]!;
-
-  // Step 2: Lock release decomposition. Sort by account_id ascending to
-  // mirror the db-writer's match-time deadlock-avoidance ordering — when
-  // both sides happen to share the same (account_id, asset_id) the order
-  // is irrelevant, but for the typical lender ≠ borrower case it keeps
-  // any concurrent transactions consistent in their lock acquisition order.
+  // Step 2: Lock release decomposition on `user_balance.in_orders`, keyed by
+  // BYTEA (user_address, asset). Sort by wallet ascending to mirror the
+  // db-writer's match-time deadlock-avoidance ordering. Both sides lock the
+  // loan token, so `asset` is `match.loanToken` for lender and borrower.
   const lenderRelease = {
-    accountId: row.lender_account_id,
-    amounts: [
-      match.matchedAmount,
-      match.lenderSettlementFeeAmount,
-      lenderTradeFee,
-    ],
-    sql: `UPDATE portfolio
-             SET locked_amount = GREATEST(
-                   locked_amount - ($1::numeric + $2::numeric + $3::numeric),
+    wallet: match.lenderWallet,
+    sql: `UPDATE user_balance
+             SET in_orders = GREATEST(
+                   in_orders - ($1::numeric + $2::numeric + $3::numeric),
                    0),
                  updated_at = NOW()
-           WHERE account_id = $4 AND asset_id = $5`,
+           WHERE user_address = decode(substring($4 from 3), 'hex')
+             AND asset = decode(substring($5 from 3), 'hex')`,
     params: [
       match.matchedAmount,
       match.lenderSettlementFeeAmount,
       lenderTradeFee,
-      row.lender_account_id,
-      row.asset_id,
+      match.lenderWallet,
+      match.loanToken,
     ],
   };
 
   const borrowerRelease = {
-    accountId: row.borrower_account_id,
-    amounts: [match.borrowerSettlementFeeAmount, borrowerTradeFee],
-    sql: `UPDATE portfolio
-             SET locked_amount = GREATEST(
-                   locked_amount - ($1::numeric + $2::numeric),
+    wallet: match.borrowerWallet,
+    sql: `UPDATE user_balance
+             SET in_orders = GREATEST(
+                   in_orders - ($1::numeric + $2::numeric),
                    0),
                  updated_at = NOW()
-           WHERE account_id = $3 AND asset_id = $4`,
+           WHERE user_address = decode(substring($3 from 3), 'hex')
+             AND asset = decode(substring($4 from 3), 'hex')`,
     params: [
       match.borrowerSettlementFeeAmount,
       borrowerTradeFee,
-      row.borrower_account_id,
-      row.asset_id,
+      match.borrowerWallet,
+      match.loanToken,
     ],
   };
 
   const ordered =
-    row.lender_account_id < row.borrower_account_id
+    lenderRelease.wallet.toLowerCase() < borrowerRelease.wallet.toLowerCase()
       ? [lenderRelease, borrowerRelease]
       : [borrowerRelease, lenderRelease];
 

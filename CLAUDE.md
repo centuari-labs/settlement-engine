@@ -39,7 +39,7 @@ src/
 │   │   ├── index.ts                       # Re-exports
 │   │   ├── connection.ts                  # Pool, transactions, retry, error classification
 │   │   ├── apply-settlement.ts            # applyOnChainEffect-stamped position writes + collateral-flag cleanup + lock-release writeback
-│   │   ├── lock-release.ts                # matches.settlement_status writeback + portfolio.locked_amount decrement (Phase 1A)
+│   │   ├── lock-release.ts                # matches.settlement_status writeback + user_balance.in_orders decrement (Phase 1A)
 │   │   ├── pending-collateral-flags.ts    # Eager DELETE from receipt CollateralFlagSet logs
 │   │   └── order-failure.ts               # Batch-failure handling
 │   ├── helpers.ts                    # UUID ↔ bytes32 conversion, hash-based IDs, backoff utility
@@ -69,17 +69,17 @@ After `Settlement.settle()` confirms on-chain, [`applySettlementResult`](src/set
 
 1. Per-event `applyOnChainEffect` for lend/borrow position rows (idempotency via `applied_by_tx_hash` / `applied_by_log_index` stamps).
 2. `clearPendingCollateralFlagsFromReceipt` — DELETEs `pending_collateral_flags` rows matching the receipt's `CollateralFlagSet` events (P3 collateral-flag cleanup).
-3. `writebackSettledMatches` ([lock-release.ts](src/settlement/database/lock-release.ts)) — for each settled match, a fresh `withTransaction` flips `matches.settlement_status PENDING → SETTLED` and decrements `portfolio.locked_amount` for both lender and borrower by the exact decomposition the matching-engine db-writer added at match time:
+3. `writebackSettledMatches` ([lock-release.ts](src/settlement/database/lock-release.ts)) — for each settled match, a fresh `withTransaction` flips `matches.settlement_status PENDING → SETTLED` and decrements `user_balance.in_orders` (keyed by BYTEA `user_address` + loan-token `asset`) for both lender and borrower by the exact decomposition the matching-engine db-writer added at match time:
 
    - lender: `matchedAmount + lenderSettlementFeeAmount + lenderTradeFee`
    - borrower: `borrowerSettlementFeeAmount + borrowerTradeFee`
    - trade-fee split: `borrowerTradeFee = takerFeeAmount` if `borrowerIsTaker`, else `makerFeeAmount`. Lender pays the opposite.
 
-**Idempotency.** The conditional `UPDATE matches SET settlement_status = 'SETTLED' … WHERE id = ? AND settlement_status = 'PENDING'` returns 0 rows on retry, so the per-side `portfolio` decrements only fire on the first transition. `GREATEST(locked_amount − decrement, 0)` is a belt-and-suspenders guard against any underflow from manual SQL repair.
+**Idempotency.** The conditional `UPDATE matches SET settlement_status = 'SETTLED' … WHERE id = ? AND settlement_status = 'PENDING'` returns 0 rows on retry, so the per-side `in_orders` decrements only fire on the first transition. `GREATEST(in_orders − decrement, 0)` is a belt-and-suspenders guard against any underflow from manual SQL repair.
 
 **Per-match transactions, not the `applyOnChainEffect` closure.** The writeback runs **after** the per-event `applyOnChainEffect` calls and in its **own** per-match `withTransaction`, not inside an `applyOnChainEffect` mutation closure. Partial failure on one match's writeback doesn't block writeback for the rest of the batch — the on-chain settlement is already final at this point, so retries are safe; stuck `PENDING` rows are picked up by the separate reconciliation job (see followups).
 
-**Match-time counterpart** lives in [matching-engine/src/services/db/postgres-db-client.ts:216-254](../matching-engine/src/services/db/postgres-db-client.ts). The decrement decomposition mirrors that increment exactly; any drift between the two sites breaks lock-release accounting.
+**Match-time counterpart** lives in [matching-engine/src/services/db/postgres-db-client.ts:251-271](../matching-engine/src/services/db/postgres-db-client.ts). The decrement decomposition mirrors that `user_balance.in_orders` increment exactly; any drift between the two sites breaks lock-release accounting.
 
 For the planned reconciliation job that sweeps stuck `PENDING` rows, see [../dev-docs/architecture-html/launches/hub-only.html](../dev-docs/architecture-html/launches/hub-only.html) Track C2 (deep reference in [archive/order-lock-lifecycle-followups.md](../smart-contract-revamp/docs/archive/order-lock-lifecycle-followups.md)).
 

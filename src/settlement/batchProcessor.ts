@@ -303,11 +303,11 @@ export class BatchProcessor {
           const payloads = batch.map((m) => m.payload);
           const failureReason = (error.originalError as any)?.code ?? error.message;
 
-          // 1. Unlock portfolio locked_amount
+          // 1. Release the user_balance.in_orders lock
           try {
             await unlockFailedMatches(payloads);
           } catch (e) {
-            logger.error({ component: 'batch-processor', err: e }, 'Failed to unlock portfolio amounts');
+            logger.error({ component: 'batch-processor', err: e }, 'Failed to release in_orders lock');
           }
 
           // 2. Mark matches as FAILED in database
