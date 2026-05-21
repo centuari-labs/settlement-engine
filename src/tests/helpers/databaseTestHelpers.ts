@@ -142,14 +142,13 @@ const getDefaultValueForType = (dataType: string): string | number | boolean => 
 /**
  * Insert a match record into the database.
  *
- * This helper is used in integration tests to ensure matches exist in the database
- * before attempting to create settlement_items that reference them via foreign key.
+ * This helper is used in integration tests to seed minimal `matches` rows so
+ * settlement writeback (matches.settlement_status + user_balance.in_orders +
+ * lend/borrow positions) has rows to operate on.
  *
- * Since settlement_items.match_id references matches table, we insert a minimal record
- * with just the primary key to satisfy the foreign key constraint.
- *
- * Foreign key constraints are temporarily disabled during the insert to allow inserting
- * matches without requiring related order records to exist first.
+ * Only the primary key carries real data; the remaining NOT NULL columns get
+ * type-appropriate defaults. Foreign key constraints are temporarily disabled
+ * during the insert so matches can be created without related order records.
  *
  * @param client - Database client (can be a transaction client).
  * @param match - Match object to insert.

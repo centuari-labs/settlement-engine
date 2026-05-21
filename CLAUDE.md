@@ -59,7 +59,7 @@ Redis Stream (settlement:matches)
   → Filter already-settled (multicall isSettled check)
   → settleMatches() on-chain tx
   → Parse events (BondTokenCreated, LendPositionCreated, BorrowPositionCreated)
-  → Persist to PostgreSQL (batch insert with FK ordering)
+  → Persist to PostgreSQL (positions + bond tokens via applyOnChainEffect; flip matches.settlement_status; decrement user_balance.in_orders)
   → ACK + XDEL Redis entries
 ```
 
@@ -111,7 +111,7 @@ Backpressure: `maxCapacity = batchSize * 5`. Deduplication via `seenIds` Set.
 3. **Exponential backoff** — `delay = min(baseMs * 2^(failures-1), maxBackoffMs)`. Apply to both smart contract retries and database retries.
 4. **Client caching** — Viem public/wallet clients are cached by `chainId|rpcUrl` key. Never create new HTTP transports per call.
 5. **Multicall for batch checks** — use `publicClient.multicall()` to batch `isSettled` checks. One RPC call, not N.
-6. **FK-ordered persistence** — insert in dependency order: matches → settlement_batches → settlement_items → (bond tokens, positions). Respect foreign key constraints.
+6. **Stamped writeback persistence** — settlement writeback writes lend/borrow positions + bond tokens via `applyOnChainEffect` (idempotency stamps), flips `matches.settlement_status` PENDING → SETTLED, and decrements `user_balance.in_orders`. The legacy `settlement_batches`/`settlement_items` tables were dropped by migration `20260515120000` and are no longer written.
 7. **Idempotent operations** — use upsert patterns. A match arriving twice must not create duplicate rows.
 8. **Graceful shutdown** — handle SIGTERM/SIGINT. Stop polling, finish current batch, close connections.
 9. **Pending entry recovery** — on startup, reclaim pending entries from dead consumers via XCLAIM. Run reclaim on a separate timer during runtime.
