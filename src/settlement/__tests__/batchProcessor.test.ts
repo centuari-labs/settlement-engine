@@ -880,10 +880,10 @@ describe('BatchProcessor', () => {
       // Wait for cleanup to attempt and fail
       await wait(500);
 
-      // Assert logger.error was called with a message about failing to unlock
+      // Assert logger.error was called with a message about failing to release the in_orders lock
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({ component: 'batch-processor' }),
-        expect.stringContaining('Failed to unlock'),
+        expect.stringContaining('Failed to release in_orders lock'),
       );
 
       // Processor should still be running (not crashed)
