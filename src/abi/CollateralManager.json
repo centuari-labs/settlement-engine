@@ -380,6 +380,11 @@
   },
   {
     "type": "error",
+    "name": "ReentrancyGuardReentrantCall",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "WouldMakeUnhealthy",
     "inputs": []
   },

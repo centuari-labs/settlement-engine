@@ -719,6 +719,11 @@
   },
   {
     "type": "error",
+    "name": "TooManyFlaggedAssets",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "Unauthorized",
     "inputs": []
   },

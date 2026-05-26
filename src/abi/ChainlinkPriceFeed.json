@@ -6,6 +6,11 @@
         "name": "aggregator_",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "sequencerUptimeFeed_",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "nonpayable"
@@ -32,6 +37,19 @@
         "name": "",
         "type": "uint8",
         "internalType": "uint8"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "SEQUENCER_UPTIME_FEED",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract AggregatorV3Interface"
       }
     ],
     "stateMutability": "view"

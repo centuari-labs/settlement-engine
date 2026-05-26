@@ -35,6 +35,19 @@
   },
   {
     "type": "function",
+    "name": "maxDeviationBps",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "operator",
     "inputs": [],
     "outputs": [
@@ -61,8 +74,57 @@
   },
   {
     "type": "function",
+    "name": "priceBounds",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "minPrice",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "maxPrice",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "renounceOwnership",
     "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setBounds",
+    "inputs": [
+      {
+        "name": "minPrice_",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "maxPrice_",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setMaxDeviationBps",
+    "inputs": [
+      {
+        "name": "maxDeviationBps_",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
     "outputs": [],
     "stateMutability": "nonpayable"
   },
@@ -107,6 +169,25 @@
   },
   {
     "type": "event",
+    "name": "MaxDeviationUpdated",
+    "inputs": [
+      {
+        "name": "oldBps",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "newBps",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "OperatorUpdated",
     "inputs": [
       {
@@ -145,6 +226,25 @@
   },
   {
     "type": "event",
+    "name": "PriceBoundsUpdated",
+    "inputs": [
+      {
+        "name": "minPrice",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "maxPrice",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "PriceUpdated",
     "inputs": [
       {
@@ -161,6 +261,16 @@
       }
     ],
     "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "InvalidBounds",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidDeviation",
+    "inputs": []
   },
   {
     "type": "error",
@@ -188,6 +298,16 @@
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "PriceDeviationTooLarge",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "PriceOutOfBounds",
+    "inputs": []
   },
   {
     "type": "error",

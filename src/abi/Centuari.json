@@ -949,6 +949,11 @@
   },
   {
     "type": "error",
+    "name": "TooManyDebtMarkets",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "Unauthorized",
     "inputs": []
   },
