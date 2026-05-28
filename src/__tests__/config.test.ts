@@ -6,8 +6,10 @@ describe('loadConfig', () => {
   const requiredEnv = {
     SETTLEMENT_CONTRACT_ADDRESS: '0x1234567890123456789012345678901234567890',
     ETHEREUM_RPC_URL: 'https://rpc.example.com',
-    SETTLEMENT_PRIVATE_KEY:
-      'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
+    TURNKEY_API_PUBLIC_KEY: 'test-public-key',
+    TURNKEY_API_PRIVATE_KEY: 'test-private-key',
+    TURNKEY_ORGANIZATION_ID: 'test-org-id',
+    TURNKEY_WALLET_ACCOUNT_ADDRESS: '0xabcdef1234567890abcdef1234567890abcdef12',
   };
 
   beforeEach(() => {
@@ -56,26 +58,31 @@ describe('loadConfig', () => {
     expect(config.ethereumChainId).toBe(421614);
   });
 
-  it('should accept private key with 0x prefix', () => {
-    process.env.SETTLEMENT_PRIVATE_KEY =
-      '0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
+  it('should map Turnkey credential fields correctly', () => {
     const config = loadConfig();
-    expect(config.settlementPrivateKey).toBe(
-      '0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
-    );
+    expect(config.turnkeyApiPublicKey).toBe('test-public-key');
+    expect(config.turnkeyApiPrivateKey).toBe('test-private-key');
+    expect(config.turnkeyOrganizationId).toBe('test-org-id');
+    expect(config.walletAddress).toBe('0xabcdef1234567890abcdef1234567890abcdef12');
   });
 
-  it('should accept private key without 0x prefix', () => {
-    process.env.SETTLEMENT_PRIVATE_KEY =
-      'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
-    const config = loadConfig();
-    expect(config.settlementPrivateKey).toBe(
-      'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
-    );
+  it('should throw when TURNKEY_API_PUBLIC_KEY is missing', () => {
+    delete process.env.TURNKEY_API_PUBLIC_KEY;
+    expect(() => loadConfig()).toThrow();
   });
 
-  it('should throw for invalid private key', () => {
-    process.env.SETTLEMENT_PRIVATE_KEY = 'not-a-valid-key';
+  it('should throw when TURNKEY_API_PRIVATE_KEY is missing', () => {
+    delete process.env.TURNKEY_API_PRIVATE_KEY;
+    expect(() => loadConfig()).toThrow();
+  });
+
+  it('should throw when TURNKEY_ORGANIZATION_ID is missing', () => {
+    delete process.env.TURNKEY_ORGANIZATION_ID;
+    expect(() => loadConfig()).toThrow();
+  });
+
+  it('should throw for invalid TURNKEY_WALLET_ACCOUNT_ADDRESS', () => {
+    process.env.TURNKEY_WALLET_ACCOUNT_ADDRESS = 'not-an-address';
     expect(() => loadConfig()).toThrow();
   });
 
