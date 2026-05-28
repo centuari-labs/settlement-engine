@@ -1,9 +1,12 @@
 import {
   applyOnChainEffect,
+  applyBorrowPositionCreatedMutation,
+  applyLendPositionCreatedMutation,
+  hexToBytea,
+  isAlreadyStamped,
   type ApplyOnChainEffectResult,
-  type IdempotencyStamp,
 } from '@centuari-labs/on-chain-effects';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool } from 'pg';
 import {
   type Address,
   type Hex,
@@ -42,11 +45,11 @@ import { clearForEvent as clearPendingCollateralFlag } from './pending-collatera
  * plan. The shared primitive is the single source of truth for the
  * verify-then-apply invariant.
  *
- * SQL upsert shapes mirror
- * [indexer-v3/src/processors/centuari.processor.ts](../../../../indexer-v3/src/processors/centuari.processor.ts)
- * byte-for-byte (latest-wins on `rate`, accumulation on `cbt_balance` /
- * `principal` / `debt`). Any divergence between the two writers would break
- * idempotency on replay, so keep them in lockstep.
+ * The lend/borrow upsert SQL now lives in the shared
+ * `@centuari-labs/on-chain-effects` mutation functions
+ * (`applyLendPositionCreatedMutation` / `applyBorrowPositionCreatedMutation`),
+ * which the indexer-v3 `centuari.processor.ts` tail calls too — so the two
+ * writers are identical by construction rather than kept in lockstep by review.
  *
  * `bond_token` rows are owned exclusively by the indexer tail because bond
  * tokens are immutable after creation and only one writer is needed.
@@ -84,36 +87,6 @@ interface BorrowEventArgs {
   rate: bigint;
 }
 
-/**
- * Convert a `0x`-prefixed hex string to a Postgres BYTEA buffer.
- */
-const hexToBytea = (hex: string): Buffer => {
-  const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
-  return Buffer.from(clean, 'hex');
-};
-
-/**
- * Row was already stamped with this exact `(tx_hash, log_index)` — this is
- * a no-op (either the eager path re-ran or the tail got there first).
- */
-const alreadyStamped = async (
-  tx: PoolClient,
-  table: 'lend_position' | 'borrow_position',
-  pkCondition: string,
-  pkValues: readonly unknown[],
-  stamp: IdempotencyStamp,
-): Promise<boolean> => {
-  const result = await tx.query<{ count: string }>(
-    `SELECT count(*)::text AS count
-       FROM ${table}
-      WHERE ${pkCondition}
-        AND applied_by_tx_hash = $${pkValues.length + 1}
-        AND applied_by_log_index = $${pkValues.length + 2}`,
-    [...pkValues, hexToBytea(stamp.txHash), stamp.logIndex],
-  );
-  return Boolean(result.rows[0] && Number(result.rows[0].count) > 0);
-};
-
 const applyLendEvent = async (
   pool: Pool,
   client: PublicClient,
@@ -132,44 +105,15 @@ const applyLendEvent = async (
       args.marketId.toLowerCase() === event.marketId.toLowerCase() &&
       args.lender.toLowerCase() === event.lender.toLowerCase(),
     alreadyAppliedCheck: (tx, stamp) =>
-      alreadyStamped(
+      isAlreadyStamped(
         tx,
         'lend_position',
         'market_id = $1 AND lender = $2',
-        [hexToBytea(event.marketId), hexToBytea(event.lender)],
+        [hexToBytea(event.marketId as Hex), hexToBytea(event.lender as Hex)],
         stamp,
       ),
-    mutation: async (tx, _args, stamp) => {
-      await tx.query(
-        `INSERT INTO lend_position
-            (market_id, lender, bond_token, cbt_balance, principal, rate,
-             applied_by_tx_hash, applied_by_log_index,
-             applied_by_block_hash, applied_by_block_number, updated_at)
-         VALUES ($1, $2, $3, $4::numeric, $5::numeric, $6::numeric,
-                 $7, $8, $9, $10, now())
-         ON CONFLICT (market_id, lender) DO UPDATE SET
-            bond_token = EXCLUDED.bond_token,
-            cbt_balance = lend_position.cbt_balance + EXCLUDED.cbt_balance,
-            principal = lend_position.principal + EXCLUDED.principal,
-            rate = EXCLUDED.rate,
-            applied_by_tx_hash = EXCLUDED.applied_by_tx_hash,
-            applied_by_log_index = EXCLUDED.applied_by_log_index,
-            applied_by_block_hash = EXCLUDED.applied_by_block_hash,
-            applied_by_block_number = EXCLUDED.applied_by_block_number,
-            updated_at = now()`,
-        [
-          hexToBytea(event.marketId),
-          hexToBytea(event.lender),
-          hexToBytea(event.bondToken),
-          event.cbtAmount.toString(),
-          event.principal.toString(),
-          event.rate.toString(),
-          hexToBytea(stamp.txHash),
-          stamp.logIndex,
-          hexToBytea(stamp.blockHash),
-          stamp.blockNumber.toString(),
-        ],
-      );
+    mutation: async (tx, args, stamp) => {
+      await applyLendPositionCreatedMutation(tx, args, stamp);
     },
   });
 };
@@ -192,42 +136,15 @@ const applyBorrowEvent = async (
       args.marketId.toLowerCase() === event.marketId.toLowerCase() &&
       args.borrower.toLowerCase() === event.borrower.toLowerCase(),
     alreadyAppliedCheck: (tx, stamp) =>
-      alreadyStamped(
+      isAlreadyStamped(
         tx,
         'borrow_position',
         'market_id = $1 AND borrower = $2',
-        [hexToBytea(event.marketId), hexToBytea(event.borrower)],
+        [hexToBytea(event.marketId as Hex), hexToBytea(event.borrower as Hex)],
         stamp,
       ),
-    mutation: async (tx, _args, stamp) => {
-      await tx.query(
-        `INSERT INTO borrow_position
-            (market_id, borrower, principal, debt, rate,
-             applied_by_tx_hash, applied_by_log_index,
-             applied_by_block_hash, applied_by_block_number, updated_at)
-         VALUES ($1, $2, $3::numeric, $4::numeric, $5::numeric,
-                 $6, $7, $8, $9, now())
-         ON CONFLICT (market_id, borrower) DO UPDATE SET
-            principal = borrow_position.principal + EXCLUDED.principal,
-            debt = borrow_position.debt + EXCLUDED.debt,
-            rate = EXCLUDED.rate,
-            applied_by_tx_hash = EXCLUDED.applied_by_tx_hash,
-            applied_by_log_index = EXCLUDED.applied_by_log_index,
-            applied_by_block_hash = EXCLUDED.applied_by_block_hash,
-            applied_by_block_number = EXCLUDED.applied_by_block_number,
-            updated_at = now()`,
-        [
-          hexToBytea(event.marketId),
-          hexToBytea(event.borrower),
-          event.principal.toString(),
-          event.debt.toString(),
-          event.rate.toString(),
-          hexToBytea(stamp.txHash),
-          stamp.logIndex,
-          hexToBytea(stamp.blockHash),
-          stamp.blockNumber.toString(),
-        ],
-      );
+    mutation: async (tx, args, stamp) => {
+      await applyBorrowPositionCreatedMutation(tx, args, stamp);
     },
   });
 };

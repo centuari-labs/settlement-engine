@@ -19,6 +19,12 @@ dotenv.config();
 // the same module id.
 jest.mock('@centuari-labs/on-chain-effects', () => ({
   applyOnChainEffect: jest.fn(async () => ({ applied: true })),
+  applyLendPositionCreatedMutation: jest.fn(async () => 1),
+  applyBorrowPositionCreatedMutation: jest.fn(async () => 1),
+  isAlreadyStamped: jest.fn(async () => false),
+  // Real impl: pending-collateral-flags.test.ts loads the real repo under this
+  // global mock and asserts the exact BYTEA bytes hexToBytea produces.
+  hexToBytea: (hex: string) => Buffer.from(hex.replace(/^0x/, ''), 'hex'),
 }));
 
 // Automatically mock smart contract module for all tests

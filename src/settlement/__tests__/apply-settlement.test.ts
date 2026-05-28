@@ -10,6 +10,10 @@ import type {
 jest.mock('@centuari-labs/on-chain-effects', () => {
   return {
     applyOnChainEffect: jest.fn(async () => ({ applied: true })),
+    applyLendPositionCreatedMutation: jest.fn(async () => 1),
+    applyBorrowPositionCreatedMutation: jest.fn(async () => 1),
+    isAlreadyStamped: jest.fn(async () => false),
+    hexToBytea: (hex: string) => Buffer.from(hex.replace(/^0x/, ''), 'hex'),
   };
 });
 
@@ -294,55 +298,6 @@ describe('applySettlementResult', () => {
     await expect(
       applySettlementResult(pool, client, settlementResult(), []),
     ).rejects.toThrow('pg exploded');
-  });
-
-  it("exercises the mutation callback against a PoolClient that executes the INSERT with stamp columns", async () => {
-    // When the helper invokes mutation(tx, decoded, stamp), the closure built
-    // by apply-settlement.ts must run the correct INSERT/UPSERT including the
-    // four applied_by_* stamp columns. Capture the mutation, invoke it with a
-    // fake client, and assert on the SQL + params.
-    const pool = fakePool();
-    const client = fakeClient();
-
-    await applySettlementResult(pool, client, settlementResult(), []);
-
-    const mutation = mockedApply.mock.calls[0]![0].mutation;
-    const capturedQueries: { sql: string; params: readonly unknown[] }[] = [];
-    const fakeTx = {
-      query: jest.fn(async (sql: string, params: readonly unknown[]) => {
-        capturedQueries.push({ sql, params });
-        return { rows: [], rowCount: 0 };
-      }),
-    } as unknown as PoolClient;
-
-    await mutation(
-      fakeTx,
-      {
-        marketId:
-          '0x1111111111111111111111111111111111111111111111111111111111111111',
-        lender: '0x2222222222222222222222222222222222222222',
-        bondToken: '0x3333333333333333333333333333333333333333',
-        cbtAmount: 1n,
-        principal: 1n,
-        rate: 1n,
-      } as never,
-      {
-        txHash: TX_HASH,
-        blockHash: BLOCK_HASH,
-        blockNumber: 100n,
-        logIndex: 0,
-      },
-    );
-
-    expect(capturedQueries).toHaveLength(1);
-    expect(capturedQueries[0]!.sql).toMatch(/INSERT INTO lend_position/);
-    expect(capturedQueries[0]!.sql).toMatch(/ON CONFLICT \(market_id, lender\)/);
-    const params = capturedQueries[0]!.params;
-    // stamp columns: tx_hash, log_index, block_hash, block_number
-    expect(params[6]).toBeInstanceOf(Buffer);
-    expect(params[7]).toBe(0);
-    expect(params[8]).toBeInstanceOf(Buffer);
-    expect(params[9]).toBe('100');
   });
 
   describe('CollateralFlagSet eager queue cleanup (Phase 3)', () => {

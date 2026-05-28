@@ -1,5 +1,6 @@
+import { hexToBytea } from '@centuari-labs/on-chain-effects';
 import type { Pool, PoolClient } from 'pg';
-import type { Address } from 'viem';
+import type { Address, Hex } from 'viem';
 
 /**
  * Read + DELETE access for the `pending_collateral_flags` table that lives
@@ -12,14 +13,6 @@ import type { Address } from 'viem';
  * direct-caller `CollateralManager.flag(asset)` events and any eager-path
  * crashes the settlement engine missed.
  */
-
-/**
- * Convert a `0x`-prefixed hex string to a Postgres BYTEA buffer.
- */
-const hexToBytea = (hex: string): Buffer => {
-  const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
-  return Buffer.from(clean, 'hex');
-};
 
 /**
  * Read pending flag rows for a set of borrowers in a single query.
@@ -40,7 +33,7 @@ export const readForBorrowers = async (
   const distinctLower = Array.from(
     new Set(borrowers.map((b) => b.toLowerCase())),
   );
-  const params = distinctLower.map((b) => hexToBytea(b));
+  const params = distinctLower.map((b) => hexToBytea(b as Hex));
 
   const result = await pool.query<{ user_address: Buffer; asset: Buffer }>(
     `SELECT user_address, asset
