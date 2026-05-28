@@ -17,11 +17,14 @@ import {
 import { BatchAccumulator } from './settlement/batchAccumulator';
 import { BatchProcessor } from './settlement/batchProcessor';
 import { createNonceManager } from './settlement/nonceManager';
+import { ensureTurnkeyPolicy } from './turnkey/policy';
 import { logger } from './logger';
 
 const main = async (): Promise<void> => {
   const config = loadConfig();
   const redis = getRedisClient(config);
+
+  await ensureTurnkeyPolicy(config);
 
   // Ensure the consumer group exists before starting.
   await ensureConsumerGroup(
