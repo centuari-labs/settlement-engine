@@ -1,3 +1,6 @@
 import pino from 'pino';
 
-export const logger = pino({ name: 'settlement-engine' });
+export const logger = pino({
+  name: 'settlement-engine',
+  redact: ['turnkeyApiPrivateKey', '*.turnkeyApiPrivateKey'],
+});
