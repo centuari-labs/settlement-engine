@@ -1,6 +1,5 @@
 import type Redis from 'ioredis';
 import type { Address, Hash } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
 import type { AppConfig } from '../config';
 import { getPublicClient } from './smartContract';
 import { logger } from '../logger';
@@ -334,12 +333,8 @@ export const createNonceManager = (
   config: AppConfig,
 ): NonceManager => {
   const publicClient = getPublicClient(config) as unknown as NoncePublicClient;
-  const privateKey = config.settlementPrivateKey.startsWith('0x')
-    ? (config.settlementPrivateKey as `0x${string}`)
-    : (`0x${config.settlementPrivateKey}` as `0x${string}`);
-  const account = privateKeyToAccount(privateKey);
 
-  return new NonceManager(redis, publicClient, account.address, {
+  return new NonceManager(redis, publicClient, config.walletAddress as `0x${string}`, {
     lockTtlMs: config.nonceLockTtlMs,
     lockRetryDelayMs: config.nonceLockRetryDelayMs,
     txConfirmationTimeoutMs: config.txConfirmationTimeoutMs,

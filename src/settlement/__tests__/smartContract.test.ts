@@ -19,8 +19,8 @@ jest.mock('viem', () => {
   };
 });
 
-jest.mock('viem/accounts', () => ({
-  privateKeyToAccount: jest.fn().mockReturnValue({
+jest.mock('../../turnkey/client', () => ({
+  getSettlementAccount: jest.fn().mockReturnValue({
     address: '0xSettlerAddress1234567890123456789012345678',
   }),
 }));
@@ -60,8 +60,10 @@ const createTestAppConfig = (overrides?: Partial<AppConfig>): AppConfig => ({
   failureBackoffMaxMs: 60000,
   settlementContractAddress: '0x1234567890123456789012345678901234567890',
   ethereumRpcUrl: 'https://rpc.example.com',
-  settlementPrivateKey:
-    'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
+  turnkeyApiPublicKey: 'test-pub-key',
+  turnkeyApiPrivateKey: 'test-priv-key',
+  turnkeyOrganizationId: 'test-org-id',
+  walletAddress: '0xSettlerAddress1234567890123456789012345678',
   ethereumChainId: 421614,
   nonceLockTtlMs: 30000,
   txConfirmationTimeoutMs: 120000,
@@ -94,8 +96,8 @@ describe('smartContract', () => {
         decodeEventLog: jest.fn(),
       };
     });
-    jest.doMock('viem/accounts', () => ({
-      privateKeyToAccount: jest.fn().mockReturnValue({
+    jest.doMock('../../turnkey/client', () => ({
+      getSettlementAccount: jest.fn().mockReturnValue({
         address: '0xSettlerAddress1234567890123456789012345678',
       }),
     }));
