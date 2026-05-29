@@ -30,5 +30,12 @@ module.exports = {
   testTimeout: 10000, // 10 seconds default, integration tests may override
   verbose: true,
   setupFilesAfterEnv: ['<rootDir>/src/tests/setup.ts'],
+  // @centuari-labs/on-chain-effects is ESM; map it to its CJS-compatible dist
+  // so jest-resolve can find it before the global jest.mock() in setup.ts
+  // intercepts actual loading.
+  moduleNameMapper: {
+    '^@centuari-labs/on-chain-effects$':
+      '<rootDir>/node_modules/@centuari-labs/on-chain-effects/dist/index.js',
+  },
 };
 

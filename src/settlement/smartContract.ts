@@ -1,4 +1,3 @@
-import { createHash } from 'crypto';
 import {
   createWalletClient,
   createPublicClient,
@@ -13,8 +12,8 @@ import {
   type PublicClient,
   type TransactionReceipt,
 } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
 import { loadConfig, type AppConfig } from '../config';
+import { getSettlementAccount } from '../turnkey/client';
 import type { Match } from '../schemas/match';
 import type { MatchWithMeta } from '../redis/settlementMatchConsumer';
 import {
@@ -488,16 +487,12 @@ let cachedWalletClient: ReturnType<typeof createWalletClient> | null = null;
 let cachedWalletKey: string | null = null;
 
 const getWalletClient = (config: AppConfig) => {
-  const keyHash = createHash('sha256').update(config.settlementPrivateKey).digest('hex');
-  const key = `${config.ethereumChainId}|${config.ethereumRpcUrl}|${keyHash}`;
+  const key = `${config.ethereumChainId}|${config.ethereumRpcUrl}|${config.walletAddress}`;
   if (cachedWalletClient && cachedWalletKey === key) {
     return cachedWalletClient;
   }
   const chain = createChainFromId(config.ethereumChainId);
-  const privateKey = config.settlementPrivateKey.startsWith('0x')
-    ? (config.settlementPrivateKey as `0x${string}`)
-    : (`0x${config.settlementPrivateKey}` as `0x${string}`);
-  const account = privateKeyToAccount(privateKey);
+  const account = getSettlementAccount(config);
   cachedWalletClient = createWalletClient({
     account,
     chain,

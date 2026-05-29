@@ -40,9 +40,12 @@ export const createTestConfig = (overrides?: Partial<AppConfig>): AppConfig => {
       process.env.SETTLEMENT_CONTRACT_ADDRESS ||
       '0x0000000000000000000000000000000000000000',
     ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || 'http://localhost:8545',
-    settlementPrivateKey:
-      process.env.SETTLEMENT_PRIVATE_KEY ||
-      '0x0000000000000000000000000000000000000000000000000000000000000001',
+    turnkeyApiPublicKey: process.env.TURNKEY_API_PUBLIC_KEY || 'test-public-key',
+    turnkeyApiPrivateKey: process.env.TURNKEY_API_PRIVATE_KEY || 'test-private-key',
+    turnkeyOrganizationId: process.env.TURNKEY_ORGANIZATION_ID || 'test-org-id',
+    walletAddress:
+      process.env.TURNKEY_WALLET_ACCOUNT_ADDRESS ||
+      '0x0000000000000000000000000000000000000001',
     ethereumChainId: Number(process.env.ETHEREUM_CHAIN_ID || '1'),
     nonceLockTtlMs: 30000,
     txConfirmationTimeoutMs: 120000,

@@ -25,6 +25,8 @@
   "license": "MIT",
   "dependencies": {
     "@centuari-labs/on-chain-effects": "file:../on-chain-effects",
+    "@turnkey/sdk-server": "5.1.0",
+    "@turnkey/viem": "0.14.10",
     "dotenv": "^16.4.5",
     "ioredis": "^5.4.1",
     "pg": "^8.13.0",

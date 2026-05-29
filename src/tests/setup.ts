@@ -31,6 +31,10 @@ jest.mock('@centuari-labs/on-chain-effects', () => ({
 // This ensures unit and integration tests don't make real blockchain calls
 jest.mock('../settlement/smartContract');
 
+// Mock Turnkey modules so tests don't require real API credentials
+jest.mock('../turnkey/client');
+jest.mock('../turnkey/policy');
+
 // Global test timeout can be adjusted here if needed
 // Individual tests can override with jest.setTimeout()
 

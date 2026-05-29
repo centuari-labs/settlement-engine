@@ -69,12 +69,10 @@ const configSchema = z.object({
     .default('60000'),
   SETTLEMENT_CONTRACT_ADDRESS: ethereumAddressSchema,
   ETHEREUM_RPC_URL: z.string().url('RPC URL must be a valid URL'),
-  SETTLEMENT_PRIVATE_KEY: z
-    .string()
-    .regex(
-      /^(0x)?[a-fA-F0-9]{64}$/,
-      'Private key must be a 64-character hex string (with or without 0x prefix)',
-    ),
+  TURNKEY_API_PUBLIC_KEY: z.string().min(1, 'TURNKEY_API_PUBLIC_KEY is required'),
+  TURNKEY_API_PRIVATE_KEY: z.string().min(1, 'TURNKEY_API_PRIVATE_KEY is required'),
+  TURNKEY_ORGANIZATION_ID: z.string().min(1, 'TURNKEY_ORGANIZATION_ID is required'),
+  TURNKEY_WALLET_ACCOUNT_ADDRESS: ethereumAddressSchema,
   ETHEREUM_CHAIN_ID: z
     .string()
     .transform((value) => Number(value || 1))
@@ -114,7 +112,10 @@ export type AppConfig = {
   readonly failureBackoffMaxMs: number;
   readonly settlementContractAddress: string;
   readonly ethereumRpcUrl: string;
-  readonly settlementPrivateKey: string;
+  readonly turnkeyApiPublicKey: string;
+  readonly turnkeyApiPrivateKey: string;
+  readonly turnkeyOrganizationId: string;
+  readonly walletAddress: string;
   readonly ethereumChainId: number;
   readonly nonceLockTtlMs: number;
   readonly txConfirmationTimeoutMs: number;
@@ -144,7 +145,10 @@ export const loadConfig = (): AppConfig => {
     failureBackoffMaxMs: parsed.SETTLEMENT_FAILURE_BACKOFF_MAX_MS,
     settlementContractAddress: parsed.SETTLEMENT_CONTRACT_ADDRESS,
     ethereumRpcUrl: parsed.ETHEREUM_RPC_URL,
-    settlementPrivateKey: parsed.SETTLEMENT_PRIVATE_KEY,
+    turnkeyApiPublicKey: parsed.TURNKEY_API_PUBLIC_KEY,
+    turnkeyApiPrivateKey: parsed.TURNKEY_API_PRIVATE_KEY,
+    turnkeyOrganizationId: parsed.TURNKEY_ORGANIZATION_ID,
+    walletAddress: parsed.TURNKEY_WALLET_ACCOUNT_ADDRESS,
     ethereumChainId: parsed.ETHEREUM_CHAIN_ID,
     nonceLockTtlMs: parsed.NONCE_LOCK_TTL_MS,
     txConfirmationTimeoutMs: parsed.TX_CONFIRMATION_TIMEOUT_MS,
