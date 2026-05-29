@@ -67,7 +67,7 @@ Redis Stream (settlement:matches)
 
 After `Settlement.settle()` confirms on-chain, [`applySettlementResult`](src/settlement/database/apply-settlement.ts) runs three writebacks against indexer-v3's Postgres in this order:
 
-1. Per-event `applyOnChainEffect` for lend/borrow position rows (idempotency via `applied_by_tx_hash` / `applied_by_log_index` stamps).
+1. Per-event `applyOnChainEffect` for lend/borrow position rows (idempotency via `applied_by_tx_hash` / `applied_by_log_index` stamps). The position upsert SQL itself comes from the shared `@centuari-labs/on-chain-effects` mutation functions (`applyLendPositionCreatedMutation` / `applyBorrowPositionCreatedMutation`, with `isAlreadyStamped`), so it is identical **by construction** with the indexer-v3 tail and can't drift (C7).
 2. `clearPendingCollateralFlagsFromReceipt` — DELETEs `pending_collateral_flags` rows matching the receipt's `CollateralFlagSet` events (P3 collateral-flag cleanup).
 3. `writebackSettledMatches` ([lock-release.ts](src/settlement/database/lock-release.ts)) — for each settled match, a fresh `withTransaction` flips `matches.settlement_status PENDING → SETTLED` and decrements `user_balance.in_orders` (keyed by BYTEA `user_address` + loan-token `asset`) for both lender and borrower by the exact decomposition the matching-engine db-writer added at match time:
 
