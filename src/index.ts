@@ -17,6 +17,7 @@ import {
 import { BatchAccumulator } from './settlement/batchAccumulator';
 import { BatchProcessor } from './settlement/batchProcessor';
 import { createNonceManager } from './settlement/nonceManager';
+import { SettlementSweeper } from './settlement/settlementSweeper';
 import { logger } from './logger';
 
 const main = async (): Promise<void> => {
@@ -79,6 +80,13 @@ const main = async (): Promise<void> => {
 
   batchProcessor.start();
 
+  // Stuck-PENDING settlement sweeper (Track C2) — flag-gated, off by default.
+  let sweeper: SettlementSweeper | null = null;
+  if (config.sweeperEnabled) {
+    sweeper = new SettlementSweeper({ config });
+    sweeper.start();
+  }
+
   logger.info(
     {
       component: 'settlement-engine',
@@ -87,12 +95,18 @@ const main = async (): Promise<void> => {
       consumer: config.consumerName,
       batchSize: config.batchSize,
       batchIntervalMs: config.batchIntervalMs,
+      sweeperEnabled: config.sweeperEnabled,
     },
     'Started',
   );
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ component: 'settlement-engine', signal }, 'Shutting down...');
+
+    // Stop the sweeper first (waits for any in-flight sweep).
+    if (sweeper) {
+      await sweeper.stop();
+    }
 
     // Stop batch processor (will process pending batches)
     await batchProcessor.stop();

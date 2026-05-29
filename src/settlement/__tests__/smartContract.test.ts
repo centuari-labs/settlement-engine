@@ -66,6 +66,10 @@ const createTestAppConfig = (overrides?: Partial<AppConfig>): AppConfig => ({
   nonceLockTtlMs: 30000,
   txConfirmationTimeoutMs: 120000,
   nonceLockRetryDelayMs: 500,
+  sweeperEnabled: false,
+  sweeperIntervalMs: 3600000,
+  sweeperStuckThresholdMs: 86400000,
+  sweeperBatchSize: 50,
   ...overrides,
 });
 

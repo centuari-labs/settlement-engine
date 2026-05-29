@@ -692,6 +692,51 @@ export const filterAlreadySettledMatches = async (
 };
 
 /**
+ * Check on-chain settled status for a list of match IDs (Track C2 sweeper).
+ *
+ * Unlike {@link filterAlreadySettledMatches}, this takes bare match-ID strings
+ * (the stuck-PENDING sweeper only has IDs, not full payloads) and returns a
+ * `Map<matchId, isSettled>`. Match IDs whose multicall read FAILED are OMITTED
+ * from the map (treated as "unknown" by the caller, which skips them that
+ * round rather than risk unlocking a possibly-settled match).
+ *
+ * @param matchIds - Match UUIDs to check.
+ * @param config - App configuration (defaults to loaded env config).
+ * @returns Map of matchId -> settled boolean (failed reads omitted).
+ */
+export const checkMatchesSettledOnChain = async (
+  matchIds: readonly string[],
+  config: AppConfig = loadConfig(),
+): Promise<Map<string, boolean>> => {
+  const settled = new Map<string, boolean>();
+  if (matchIds.length === 0) {
+    return settled;
+  }
+
+  const publicClient = getPublicClient(config);
+  const contractAddress = config.settlementContractAddress as Address;
+
+  const results = await publicClient.multicall({
+    contracts: matchIds.map((matchId) => ({
+      address: contractAddress,
+      abi: SETTLEMENT_CONTRACT_ABI,
+      functionName: 'isSettled' as const,
+      args: [keccak256(toBytes(matchId))] as const,
+    })),
+  });
+
+  for (let i = 0; i < matchIds.length; i++) {
+    const result = results[i];
+    if (result.status === 'success') {
+      settled.set(matchIds[i], result.result === true);
+    }
+    // status === 'failure' -> omit (unknown); caller skips this round.
+  }
+
+  return settled;
+};
+
+/**
  * Call the smart contract to settle a batch of matches.
  *
  * @param options - Options for the settlement batch call.
