@@ -95,6 +95,26 @@ const configSchema = z.object({
     .transform((value) => Number(value || 500))
     .pipe(z.number().int().positive())
     .default('500'),
+  // Stuck-PENDING settlement sweeper (Track C2). Ships disabled by default.
+  SWEEPER_ENABLED: z
+    .string()
+    .transform((value) => value === 'true')
+    .default('false'),
+  SWEEPER_INTERVAL_MS: z
+    .string()
+    .transform((value) => Number(value || 3600000))
+    .pipe(z.number().int().positive())
+    .default('3600000'),
+  SWEEPER_STUCK_THRESHOLD_MS: z
+    .string()
+    .transform((value) => Number(value || 86400000))
+    .pipe(z.number().int().positive())
+    .default('86400000'),
+  SWEEPER_BATCH_SIZE: z
+    .string()
+    .transform((value) => Number(value || 50))
+    .pipe(z.number().int().positive())
+    .default('50'),
 });
 
 export type AppConfig = {
@@ -119,6 +139,10 @@ export type AppConfig = {
   readonly nonceLockTtlMs: number;
   readonly txConfirmationTimeoutMs: number;
   readonly nonceLockRetryDelayMs: number;
+  readonly sweeperEnabled: boolean;
+  readonly sweeperIntervalMs: number;
+  readonly sweeperStuckThresholdMs: number;
+  readonly sweeperBatchSize: number;
 };
 
 /**
@@ -149,6 +173,10 @@ export const loadConfig = (): AppConfig => {
     nonceLockTtlMs: parsed.NONCE_LOCK_TTL_MS,
     txConfirmationTimeoutMs: parsed.TX_CONFIRMATION_TIMEOUT_MS,
     nonceLockRetryDelayMs: parsed.NONCE_LOCK_RETRY_DELAY_MS,
+    sweeperEnabled: parsed.SWEEPER_ENABLED,
+    sweeperIntervalMs: parsed.SWEEPER_INTERVAL_MS,
+    sweeperStuckThresholdMs: parsed.SWEEPER_STUCK_THRESHOLD_MS,
+    sweeperBatchSize: parsed.SWEEPER_BATCH_SIZE,
   };
 };
 

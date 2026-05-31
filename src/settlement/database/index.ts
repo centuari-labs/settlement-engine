@@ -24,3 +24,11 @@ export {
   applyMatchSettlementWriteback,
   writebackSettledMatches,
 } from './lock-release';
+
+export {
+  findStuckPendingMatches,
+  remediateUnsettledMatch,
+  SWEEPER_FAILURE_REASON,
+} from './pending-settlement-sweep';
+
+export type { StuckMatch } from './pending-settlement-sweep';
