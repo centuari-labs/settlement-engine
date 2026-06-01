@@ -31,6 +31,13 @@ jest.mock('@centuari-labs/on-chain-effects', () => ({
 // This ensures unit and integration tests don't make real blockchain calls
 jest.mock('../settlement/smartContract');
 
+// Poison-match isolation (Track C8) now runs unconditionally in processBatch.
+// Mock it globally so suites that don't exercise it (e.g. processBatch.test.ts)
+// see a clean dry-run (no poison) and behave as before. Suites that test the
+// real module (poisonIsolation.test.ts) unmock it; processBatch.poison.test.ts
+// overrides the per-test behavior.
+jest.mock('../settlement/poisonIsolation');
+
 // Global test timeout can be adjusted here if needed
 // Individual tests can override with jest.setTimeout()
 
@@ -49,6 +56,13 @@ beforeEach(() => {
         alreadySettled: [],
       }),
     );
+  }
+
+  // Default: poison-isolation dry-run is clean (returns null → settle all).
+  // Guard: skip if the module was unmocked (poisonIsolation.test.ts).
+  const poisonIsolation = require('../settlement/poisonIsolation');
+  if (typeof poisonIsolation.simulateSettleBatch.mockImplementation === 'function') {
+    poisonIsolation.simulateSettleBatch.mockResolvedValue(null);
   }
 });
 

@@ -5,9 +5,11 @@
  * transformMatchToContractFormat / mapContractError from smartContract, which
  * setup.ts globally mocks. We unmock it so the real helpers run, and spy
  * getPublicClient to inject a fake client whose simulateContract we drive.
+ * setup.ts also globally mocks poisonIsolation itself — unmock it here.
  */
 
 jest.unmock('../smartContract');
+jest.unmock('../poisonIsolation');
 
 import * as smartContract from '../smartContract';
 import {

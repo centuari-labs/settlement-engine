@@ -70,8 +70,6 @@ const createTestAppConfig = (overrides?: Partial<AppConfig>): AppConfig => ({
   sweeperIntervalMs: 3600000,
   sweeperStuckThresholdMs: 86400000,
   sweeperBatchSize: 50,
-  poisonIsolationEnabled: false,
-  poisonIsolationMaxRounds: 1,
   ...overrides,
 });
 
