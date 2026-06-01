@@ -115,14 +115,16 @@ const configSchema = z.object({
     .transform((value) => Number(value || 50))
     .pipe(z.number().int().positive())
     .default('50'),
-  // Poison-match isolation (Track C8). When enabled, each batch is dry-run via
-  // simulateContract before submit; a match that would revert the whole tx is
-  // quarantined (marked FAILED + locks released) and the survivors settle.
-  // Ships disabled by default (mirrors SWEEPER_ENABLED) — flip on per-env.
+  // Poison-match isolation (Track C8). Each batch is dry-run via simulateContract
+  // before submit; a match that would revert the whole tx is quarantined (marked
+  // FAILED + locks released) and the survivors settle. This is the required
+  // behavior, so it defaults ON — the env var exists only as a kill-switch
+  // (set POISON_ISOLATION_ENABLED=false) to instantly revert to the
+  // settle-the-whole-batch path without a redeploy if live simulation misbehaves.
   POISON_ISOLATION_ENABLED: z
     .string()
-    .transform((value) => value === 'true')
-    .default('false'),
+    .transform((value) => value !== 'false')
+    .default('true'),
   // Max survivor-isolation rounds after a batch dry-run reverts before giving
   // up to the existing whole-batch failure path. 1 = isolate once, then settle
   // the survivors only if they re-simulate clean.
