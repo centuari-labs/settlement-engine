@@ -120,8 +120,10 @@ export const processSettlementBatch = async (
     return;
   }
 
-  //@todo : what if only 1 matches that is not valid, that will make the entire transaction fail, we need to handle this case.
-  //@todo : if calling the smart contract failed, we need to handle the error and retry the transaction.
+  // Poison-match isolation: one invalid match in the batch reverts the whole
+  // on-chain tx and keeps failing on retry. filterAlreadySettledMatches only
+  // drops already-settled matches, not invalid ones. Tracked: hub-only plan
+  // Track C8.
 
   logger.info(
     {

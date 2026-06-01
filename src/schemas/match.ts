@@ -15,10 +15,10 @@ export const ethereumAddressSchema = z
 export const matchSchema = z.object({
   matchId: z.string().uuid('Match ID must be a valid UUID'),
   marketId: z.string().uuid('Market ID must be a valid UUID'),
-  lendOrderId: z.string().uuid('Lend order ID must be a valid UUID'), //@note : change into order market id in future
-  borrowOrderId: z.string().uuid('Borrow order ID must be a valid UUID'), //@note : change into order market id in future
-  lenderWallet: ethereumAddressSchema, //@note : change into account id in future
-  borrowerWallet: ethereumAddressSchema, //@note : change into account id in future
+  lendOrderId: z.string().uuid('Lend order ID must be a valid UUID'),
+  borrowOrderId: z.string().uuid('Borrow order ID must be a valid UUID'),
+  lenderWallet: ethereumAddressSchema,
+  borrowerWallet: ethereumAddressSchema,
   matchedAmount: z
     .string()
     .regex(/^\d+$/, 'Matched amount must be a positive integer string'),
@@ -27,7 +27,7 @@ export const matchSchema = z.object({
     .int('Rate must be an integer')
     .min(0, 'Rate must be non-negative')
     .max(10000, 'Rate must not exceed 10000 basis points (100%)'),
-  loanToken: ethereumAddressSchema, //@note : change into account id in future
+  loanToken: ethereumAddressSchema,
   maturity: z.number().int().positive('Maturity must be a positive integer'),
   timestamp: z.number().int().positive('Timestamp must be a positive integer'),
   borrowerIsTaker: z.boolean(),
