@@ -73,7 +73,6 @@ describe('processSettlementBatch — poison isolation', () => {
     testStream = `test:settlement:matches:poison:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     testConfig = createTestConfig({
       settlementMatchesStream: testStream,
-      poisonIsolationEnabled: true,
     });
     redis = getRedisClient(testConfig);
 
@@ -111,20 +110,6 @@ describe('processSettlementBatch — poison isolation', () => {
     if (!entryId) throw new Error('Failed to add entry to stream');
     return createMatchWithMeta(match, { id: entryId, stream: testStream });
   };
-
-  it('does not run isolation when the flag is off (regression)', async () => {
-    const offConfig = createTestConfig({
-      settlementMatchesStream: testStream,
-      poisonIsolationEnabled: false,
-    });
-    const m = await enqueue();
-
-    await processSettlementBatch([m], context, offConfig);
-
-    expect(mockSimulateBatch).not.toHaveBeenCalled();
-    expect(mockSettleBatch).toHaveBeenCalledTimes(1);
-    expect(await redis.xlen(testStream)).toBe(0);
-  });
 
   it('settles the whole batch when the dry-run is clean', async () => {
     mockSimulateBatch.mockResolvedValue(null);

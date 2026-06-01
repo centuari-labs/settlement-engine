@@ -233,73 +233,72 @@ export const processSettlementBatch = async (
 
   const cfg = config ?? loadConfig();
 
-  // Step 0.75: Poison-match isolation (Track C8) — flag-gated. Dry-run the
-  // batch off-chain; if it would revert, quarantine the offending match(es)
-  // (mark FAILED + restore orders + release locks + ACK from Redis) and settle
-  // only the survivors. Without this, one invalid match reverts the whole tx
-  // and keeps failing on retry, blocking every valid match it was batched with.
+  // Step 0.75: Poison-match isolation (Track C8). Dry-run the batch off-chain;
+  // if it would revert, quarantine the offending match(es) (mark FAILED +
+  // restore orders + release locks + ACK from Redis) and settle only the
+  // survivors. Without this, one invalid match reverts the whole tx and keeps
+  // failing on retry, blocking every valid match it was batched with. This is
+  // required behavior and always runs (no opt-out flag).
   let toSettle: readonly MatchWithMeta[] = unsettled;
-  if (cfg.poisonIsolationEnabled) {
-    try {
-      const batchSim = await simulateSettleBatch(
-        unsettled.map((m) => m.payload),
+  try {
+    const batchSim = await simulateSettleBatch(
+      unsettled.map((m) => m.payload),
+      cfg,
+      collateralAssetsByBorrower,
+    );
+    if (batchSim !== null) {
+      if (batchSim.retryable) {
+        // Transient (RPC down / paused / nonce). Do NOT quarantine — leave
+        // the batch PENDING for retry.
+        throw new BatchProcessingError(
+          `Pre-flight simulation transient failure: ${batchSim.message}`,
+          true,
+          batchSim,
+        );
+      }
+      // Real revert: isolate the poison match(es).
+      const iso = await simulateMatchesForPoison(
+        unsettled,
         cfg,
         collateralAssetsByBorrower,
       );
-      if (batchSim !== null) {
-        if (batchSim.retryable) {
-          // Transient (RPC down / paused / nonce). Do NOT quarantine — leave
-          // the batch PENDING for retry.
-          throw new BatchProcessingError(
-            `Pre-flight simulation transient failure: ${batchSim.message}`,
-            true,
-            batchSim,
-          );
-        }
-        // Real revert: isolate the poison match(es).
-        const iso = await simulateMatchesForPoison(
-          unsettled,
-          cfg,
-          collateralAssetsByBorrower,
+      if (iso.poison.length > 0) {
+        await quarantinePoisonMatches(context, iso.poison, iso.poisonReasons);
+        logger.warn(
+          {
+            component: 'process-settlement-batch',
+            poisonCount: iso.poison.length,
+            survivorCount: iso.survivors.length,
+            poisonMatchIds: iso.poison.map((m) => m.payload.matchId),
+          },
+          'Quarantined poison matches; settling survivors',
         );
-        if (iso.poison.length > 0) {
-          await quarantinePoisonMatches(context, iso.poison, iso.poisonReasons);
-          logger.warn(
-            {
-              component: 'process-settlement-batch',
-              poisonCount: iso.poison.length,
-              survivorCount: iso.survivors.length,
-              poisonMatchIds: iso.poison.map((m) => m.payload.matchId),
-            },
-            'Quarantined poison matches; settling survivors',
-          );
-        }
-        if (!iso.survivorsSimulateClean) {
-          // Survivors still revert collectively after one isolation round
-          // (interaction-only failure). Don't guess — hand the remaining batch
-          // to the existing whole-batch failure path.
-          throw new BatchProcessingError(
-            'Survivors still revert after poison isolation',
-            false,
-            batchSim,
-          );
-        }
-        toSettle = iso.survivors;
       }
-    } catch (error) {
-      if (error instanceof BatchProcessingError) {
-        throw error;
+      if (!iso.survivorsSimulateClean) {
+        // Survivors still revert collectively after one isolation round
+        // (interaction-only failure). Don't guess — hand the remaining batch
+        // to the existing whole-batch failure path.
+        throw new BatchProcessingError(
+          'Survivors still revert after poison isolation',
+          false,
+          batchSim,
+        );
       }
-      // simulateMatchesForPoison throws a transient SettlementError when an RPC
-      // probe is flaky — leave the batch pending rather than quarantining.
-      const se = error as SettlementError;
-      const retryable = se?.retryable !== undefined ? se.retryable : true;
-      throw new BatchProcessingError(
-        `Poison isolation failed: ${se?.message ?? String(error)}`,
-        retryable,
-        error,
-      );
+      toSettle = iso.survivors;
     }
+  } catch (error) {
+    if (error instanceof BatchProcessingError) {
+      throw error;
+    }
+    // simulateMatchesForPoison throws a transient SettlementError when an RPC
+    // probe is flaky — leave the batch pending rather than quarantining.
+    const se = error as SettlementError;
+    const retryable = se?.retryable !== undefined ? se.retryable : true;
+    throw new BatchProcessingError(
+      `Poison isolation failed: ${se?.message ?? String(error)}`,
+      retryable,
+      error,
+    );
   }
 
   if (toSettle.length === 0) {
