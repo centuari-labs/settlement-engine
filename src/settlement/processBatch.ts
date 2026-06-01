@@ -13,8 +13,14 @@ import {
   applySettlementResult,
   getPool,
   readPendingCollateralFlagsForBorrowers,
+  quarantineFailedMatch,
+  POISON_FAILURE_REASON,
   type DatabaseError,
 } from './database';
+import {
+  simulateSettleBatch,
+  simulateMatchesForPoison,
+} from './poisonIsolation';
 import { loadConfig } from '../config';
 import type { NonceManager } from './nonceManager';
 
@@ -93,6 +99,25 @@ const ackAndDeleteEntries = async (
       await context.redis.xdel(stream, ...batch);
     }
   }
+};
+
+/**
+ * Quarantine poison matches (Track C8): mark each FAILED + restore orders +
+ * release its `in_orders` lock in one atomic tx (`quarantineFailedMatch`), then
+ * ACK/XDEL its Redis entry so it is never redelivered into a future batch.
+ * Idempotent — a match already FAILED no-ops the DB flip but is still ACKed.
+ */
+const quarantinePoisonMatches = async (
+  context: SettlementBatchContext,
+  poison: readonly MatchWithMeta[],
+  reasons: ReadonlyMap<string, string>,
+): Promise<void> => {
+  for (const match of poison) {
+    const code = reasons.get(match.id);
+    const reason = code ? `${POISON_FAILURE_REASON}:${code}` : POISON_FAILURE_REASON;
+    await quarantineFailedMatch(match.payload, reason);
+  }
+  await ackAndDeleteEntries(context, poison);
 };
 
 /**
@@ -206,12 +231,92 @@ export const processSettlementBatch = async (
     );
   }
 
+  const cfg = config ?? loadConfig();
+
+  // Step 0.75: Poison-match isolation (Track C8) — flag-gated. Dry-run the
+  // batch off-chain; if it would revert, quarantine the offending match(es)
+  // (mark FAILED + restore orders + release locks + ACK from Redis) and settle
+  // only the survivors. Without this, one invalid match reverts the whole tx
+  // and keeps failing on retry, blocking every valid match it was batched with.
+  let toSettle: readonly MatchWithMeta[] = unsettled;
+  if (cfg.poisonIsolationEnabled) {
+    try {
+      const batchSim = await simulateSettleBatch(
+        unsettled.map((m) => m.payload),
+        cfg,
+        collateralAssetsByBorrower,
+      );
+      if (batchSim !== null) {
+        if (batchSim.retryable) {
+          // Transient (RPC down / paused / nonce). Do NOT quarantine — leave
+          // the batch PENDING for retry.
+          throw new BatchProcessingError(
+            `Pre-flight simulation transient failure: ${batchSim.message}`,
+            true,
+            batchSim,
+          );
+        }
+        // Real revert: isolate the poison match(es).
+        const iso = await simulateMatchesForPoison(
+          unsettled,
+          cfg,
+          collateralAssetsByBorrower,
+        );
+        if (iso.poison.length > 0) {
+          await quarantinePoisonMatches(context, iso.poison, iso.poisonReasons);
+          logger.warn(
+            {
+              component: 'process-settlement-batch',
+              poisonCount: iso.poison.length,
+              survivorCount: iso.survivors.length,
+              poisonMatchIds: iso.poison.map((m) => m.payload.matchId),
+            },
+            'Quarantined poison matches; settling survivors',
+          );
+        }
+        if (!iso.survivorsSimulateClean) {
+          // Survivors still revert collectively after one isolation round
+          // (interaction-only failure). Don't guess — hand the remaining batch
+          // to the existing whole-batch failure path.
+          throw new BatchProcessingError(
+            'Survivors still revert after poison isolation',
+            false,
+            batchSim,
+          );
+        }
+        toSettle = iso.survivors;
+      }
+    } catch (error) {
+      if (error instanceof BatchProcessingError) {
+        throw error;
+      }
+      // simulateMatchesForPoison throws a transient SettlementError when an RPC
+      // probe is flaky — leave the batch pending rather than quarantining.
+      const se = error as SettlementError;
+      const retryable = se?.retryable !== undefined ? se.retryable : true;
+      throw new BatchProcessingError(
+        `Poison isolation failed: ${se?.message ?? String(error)}`,
+        retryable,
+        error,
+      );
+    }
+  }
+
+  if (toSettle.length === 0) {
+    // Every match was poison (or already-settled). Nothing left to submit.
+    logger.info(
+      { component: 'process-settlement-batch' },
+      'No matches left to settle after poison isolation',
+    );
+    return;
+  }
+
   let settlementResult;
   try {
     // Step 1: Call smart contract to settle the batch
     const startTime = Date.now();
     settlementResult = await settleBatch({
-      matches: unsettled.map((m) => m.payload),
+      matches: toSettle.map((m) => m.payload),
       config,
       nonceManager: context.nonceManager,
       collateralAssetsByBorrower,
@@ -225,7 +330,7 @@ export const processSettlementBatch = async (
         blockNumber: settlementResult.blockNumber,
         gasUsed: settlementResult.gasUsed,
         duration,
-        matchCount: unsettled.length,
+        matchCount: toSettle.length,
       },
       'Smart contract settlement successful',
     );
@@ -242,7 +347,7 @@ export const processSettlementBatch = async (
         err: settlementError.message,
         code: settlementError.code,
         retryable: isRetryable,
-        matchCount: unsettled.length,
+        matchCount: toSettle.length,
       },
       'Smart contract settlement failed',
     );
@@ -272,12 +377,12 @@ export const processSettlementBatch = async (
       getPool(),
       publicClient,
       settlementResult,
-      unsettled.map((m) => m.payload),
+      toSettle.map((m) => m.payload),
     );
     const duration = Date.now() - startTime;
 
     logger.info(
-      { component: 'process-settlement-batch', duration, matchCount: unsettled.length },
+      { component: 'process-settlement-batch', duration, matchCount: toSettle.length },
       'Applied settlement result to indexer-v3 schema',
     );
   } catch (error) {
@@ -291,7 +396,7 @@ export const processSettlementBatch = async (
         err: dbError.message ?? (error as Error).message,
         code: dbError.code,
         retryable: isRetryable,
-        matchCount: unsettled.length,
+        matchCount: toSettle.length,
       },
       'Settlement apply to indexer-v3 schema failed',
     );
@@ -306,7 +411,7 @@ export const processSettlementBatch = async (
   // Step 3: ACK and delete entries from Redis.
   // Phase 1 committed settlement records + raw events, so even if Phase 2
   // (event processing) failed, the data is safe and the recovery loop will retry.
-  await ackAndDeleteEntries(context, unsettled);
+  await ackAndDeleteEntries(context, toSettle);
 
   // Apply a length-based trim on the main settlement stream to enforce a
   // bounded retention window and avoid unbounded growth.
@@ -320,7 +425,7 @@ export const processSettlementBatch = async (
   logger.info(
     {
       component: 'process-settlement-batch',
-      matchCount: unsettled.length,
+      matchCount: toSettle.length,
       transactionHash: settlementResult.transactionHash,
     },
     'Batch processing complete',

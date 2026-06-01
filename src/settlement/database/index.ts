@@ -18,6 +18,8 @@ export {
   unlockFailedMatches,
   recordFailedMatches,
   restoreOrdersForFailedMatches,
+  quarantineFailedMatch,
+  POISON_FAILURE_REASON,
 } from './order-failure';
 
 export {
