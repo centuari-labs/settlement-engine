@@ -234,7 +234,7 @@ const uuidToBytes32Direct = (uuid: string): Hash => {
  *   through with no on-chain flag mutation for that borrower.
  * @returns MatchData struct in the format expected by the contract.
  */
-const transformMatchToContractFormat = (
+export const transformMatchToContractFormat = (
   match: Match,
   collateralAssetsByBorrower?: ReadonlyMap<string, readonly Address[]>,
 ) => {
@@ -276,7 +276,7 @@ const transformMatchToContractFormat = (
  * @param matchIds - Array of match IDs that failed.
  * @returns SettlementError with appropriate retryability flag.
  */
-const mapContractError = (
+export const mapContractError = (
   error: unknown,
   matchIds: readonly string[],
 ): SettlementError => {
@@ -505,6 +505,20 @@ const getWalletClient = (config: AppConfig) => {
   });
   cachedWalletKey = key;
   return cachedWalletClient;
+};
+
+/**
+ * Derive the settler EOA address from the configured private key. Used as the
+ * `account` (msg.sender / `from`) for read-only `simulateContract` dry-runs so
+ * they pass `Settlement.settleMatch(es)`' `onlyOperator` gate — a multicall
+ * dry-run would run as the Multicall3 contract and fail that gate for every
+ * match.
+ */
+export const getSettlerAddress = (config: AppConfig): Address => {
+  const privateKey = config.settlementPrivateKey.startsWith('0x')
+    ? (config.settlementPrivateKey as `0x${string}`)
+    : (`0x${config.settlementPrivateKey}` as `0x${string}`);
+  return privateKeyToAccount(privateKey).address;
 };
 
 /**

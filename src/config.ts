@@ -115,6 +115,22 @@ const configSchema = z.object({
     .transform((value) => Number(value || 50))
     .pipe(z.number().int().positive())
     .default('50'),
+  // Poison-match isolation (Track C8). When enabled, each batch is dry-run via
+  // simulateContract before submit; a match that would revert the whole tx is
+  // quarantined (marked FAILED + locks released) and the survivors settle.
+  // Ships disabled by default (mirrors SWEEPER_ENABLED) — flip on per-env.
+  POISON_ISOLATION_ENABLED: z
+    .string()
+    .transform((value) => value === 'true')
+    .default('false'),
+  // Max survivor-isolation rounds after a batch dry-run reverts before giving
+  // up to the existing whole-batch failure path. 1 = isolate once, then settle
+  // the survivors only if they re-simulate clean.
+  POISON_ISOLATION_MAX_ROUNDS: z
+    .string()
+    .transform((value) => Number(value || 1))
+    .pipe(z.number().int().positive())
+    .default('1'),
 });
 
 export type AppConfig = {
@@ -143,6 +159,8 @@ export type AppConfig = {
   readonly sweeperIntervalMs: number;
   readonly sweeperStuckThresholdMs: number;
   readonly sweeperBatchSize: number;
+  readonly poisonIsolationEnabled: boolean;
+  readonly poisonIsolationMaxRounds: number;
 };
 
 /**
@@ -177,6 +195,8 @@ export const loadConfig = (): AppConfig => {
     sweeperIntervalMs: parsed.SWEEPER_INTERVAL_MS,
     sweeperStuckThresholdMs: parsed.SWEEPER_STUCK_THRESHOLD_MS,
     sweeperBatchSize: parsed.SWEEPER_BATCH_SIZE,
+    poisonIsolationEnabled: parsed.POISON_ISOLATION_ENABLED,
+    poisonIsolationMaxRounds: parsed.POISON_ISOLATION_MAX_ROUNDS,
   };
 };
 
