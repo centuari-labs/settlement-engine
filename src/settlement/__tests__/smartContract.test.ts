@@ -59,7 +59,7 @@ const createTestAppConfig = (overrides?: Partial<AppConfig>): AppConfig => ({
   failureBackoffBaseMs: 1000,
   failureBackoffMaxMs: 60000,
   settlementContractAddress: '0x1234567890123456789012345678901234567890',
-  ethereumRpcUrl: 'https://rpc.example.com',
+  ethereumRpcUrls: ['https://rpc.example.com'],
   settlementPrivateKey:
     'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
   ethereumChainId: 421614,
@@ -145,6 +145,22 @@ describe('smartContract', () => {
       const viem = require('viem');
       const config1 = createTestAppConfig({ ethereumChainId: 1 });
       const config2 = createTestAppConfig({ ethereumChainId: 42161 });
+      smartContractModule.getPublicClient(config1);
+      smartContractModule.getPublicClient(config2);
+      expect(viem.createPublicClient).toHaveBeenCalledTimes(2);
+    });
+
+    it('should create a new client when the RPC URL list changes (failover)', () => {
+      const viem = require('viem');
+      const config1 = createTestAppConfig({
+        ethereumRpcUrls: ['https://primary.example.com'],
+      });
+      const config2 = createTestAppConfig({
+        ethereumRpcUrls: [
+          'https://primary.example.com',
+          'https://secondary.example.com',
+        ],
+      });
       smartContractModule.getPublicClient(config1);
       smartContractModule.getPublicClient(config2);
       expect(viem.createPublicClient).toHaveBeenCalledTimes(2);
