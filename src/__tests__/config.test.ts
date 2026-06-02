@@ -89,6 +89,40 @@ describe('loadConfig', () => {
     expect(() => loadConfig()).toThrow();
   });
 
+  describe('ethereumRpcUrls (RPC failover — Track D3)', () => {
+    it('should expose a single-element list when only the primary is set', () => {
+      const config = loadConfig();
+      expect(config.ethereumRpcUrls).toEqual(['https://rpc.example.com']);
+      expect(config.ethereumRpcUrl).toBe('https://rpc.example.com');
+    });
+
+    it('should order primary, secondary, tertiary when all are set', () => {
+      process.env.ETHEREUM_RPC_URL = 'https://alchemy.example.com';
+      process.env.ETHEREUM_RPC_URL_SECONDARY = 'https://infura.example.com';
+      process.env.ETHEREUM_RPC_URL_TERTIARY = 'https://quicknode.example.com';
+      const config = loadConfig();
+      expect(config.ethereumRpcUrls).toEqual([
+        'https://alchemy.example.com',
+        'https://infura.example.com',
+        'https://quicknode.example.com',
+      ]);
+    });
+
+    it('should include the secondary but skip an unset tertiary', () => {
+      process.env.ETHEREUM_RPC_URL_SECONDARY = 'https://infura.example.com';
+      const config = loadConfig();
+      expect(config.ethereumRpcUrls).toEqual([
+        'https://rpc.example.com',
+        'https://infura.example.com',
+      ]);
+    });
+
+    it('should throw for an invalid secondary RPC URL', () => {
+      process.env.ETHEREUM_RPC_URL_SECONDARY = 'not-a-url';
+      expect(() => loadConfig()).toThrow();
+    });
+  });
+
   it('should throw when required vars are missing', () => {
     delete process.env.SETTLEMENT_CONTRACT_ADDRESS;
     expect(() => loadConfig()).toThrow();

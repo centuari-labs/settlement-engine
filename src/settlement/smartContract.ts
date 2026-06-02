@@ -3,6 +3,8 @@ import {
   createWalletClient,
   createPublicClient,
   http,
+  fallback,
+  type Transport,
   type Address,
   type Hash,
   keccak256,
@@ -464,21 +466,37 @@ const createChainFromId = (chainId: number): Chain => {
 };
 
 /**
- * Cached viem clients keyed by "<chainId>|<rpcUrl>" to avoid creating new
- * HTTP transports on every poll cycle (which leaks memory).
+ * Build a Viem transport from an ordered list of RPC URLs (Track D3).
+ * A single URL yields a plain `http` transport; multiple URLs yield a
+ * `fallback` transport so a primary-provider outage fails over to the next
+ * endpoint (primary → secondary → tertiary) instead of stalling settlement.
+ */
+export const buildTransport = (urls: string[]): Transport => {
+  if (urls.length === 0) {
+    throw new Error('buildTransport requires at least one RPC URL');
+  }
+  return urls.length > 1
+    ? fallback(urls.map((url) => http(url)))
+    : http(urls[0]);
+};
+
+/**
+ * Cached viem clients keyed by "<chainId>|<rpcUrls>" to avoid creating new
+ * transports on every poll cycle (which leaks memory). The key includes the
+ * full RPC URL list so a failover-config change busts the cache.
  */
 let cachedPublicClient: ReturnType<typeof createPublicClient> | null = null;
 let cachedClientKey: string | null = null;
 
 export const getPublicClient = (config: AppConfig) => {
-  const key = `${config.ethereumChainId}|${config.ethereumRpcUrl}`;
+  const key = `${config.ethereumChainId}|${config.ethereumRpcUrls.join(',')}`;
   if (cachedPublicClient && cachedClientKey === key) {
     return cachedPublicClient;
   }
   const chain = createChainFromId(config.ethereumChainId);
   cachedPublicClient = createPublicClient({
     chain,
-    transport: http(config.ethereumRpcUrl),
+    transport: buildTransport(config.ethereumRpcUrls),
   });
   cachedClientKey = key;
   return cachedPublicClient;
@@ -489,7 +507,7 @@ let cachedWalletKey: string | null = null;
 
 const getWalletClient = (config: AppConfig) => {
   const keyHash = createHash('sha256').update(config.settlementPrivateKey).digest('hex');
-  const key = `${config.ethereumChainId}|${config.ethereumRpcUrl}|${keyHash}`;
+  const key = `${config.ethereumChainId}|${config.ethereumRpcUrls.join(',')}|${keyHash}`;
   if (cachedWalletClient && cachedWalletKey === key) {
     return cachedWalletClient;
   }
@@ -501,7 +519,7 @@ const getWalletClient = (config: AppConfig) => {
   cachedWalletClient = createWalletClient({
     account,
     chain,
-    transport: http(config.ethereumRpcUrl),
+    transport: buildTransport(config.ethereumRpcUrls),
   });
   cachedWalletKey = key;
   return cachedWalletClient;
@@ -800,6 +818,7 @@ export const settleBatch = async (
       settlementContractAddress: config.settlementContractAddress,
       ethereumChainId: config.ethereumChainId,
       ethereumRpcUrl: config.ethereumRpcUrl,
+      rpcEndpointCount: config.ethereumRpcUrls.length,
     },
     'Settling batch',
   );

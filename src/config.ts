@@ -69,6 +69,16 @@ const configSchema = z.object({
     .default('60000'),
   SETTLEMENT_CONTRACT_ADDRESS: ethereumAddressSchema,
   ETHEREUM_RPC_URL: z.string().url('RPC URL must be a valid URL'),
+  // Optional secondary/tertiary RPCs for Viem fallback failover (Track D3).
+  // Intended ordering: primary=Alchemy, secondary=Infura, tertiary=QuickNode.
+  ETHEREUM_RPC_URL_SECONDARY: z
+    .string()
+    .url('Secondary RPC URL must be a valid URL')
+    .optional(),
+  ETHEREUM_RPC_URL_TERTIARY: z
+    .string()
+    .url('Tertiary RPC URL must be a valid URL')
+    .optional(),
   SETTLEMENT_PRIVATE_KEY: z
     .string()
     .regex(
@@ -134,6 +144,12 @@ export type AppConfig = {
   readonly failureBackoffMaxMs: number;
   readonly settlementContractAddress: string;
   readonly ethereumRpcUrl: string;
+  /**
+   * Ordered RPC endpoints for the Viem fallback transport (primary first).
+   * A single entry yields a plain http transport; multiple entries enable
+   * automatic failover (Track D3).
+   */
+  readonly ethereumRpcUrls: string[];
   readonly settlementPrivateKey: string;
   readonly ethereumChainId: number;
   readonly nonceLockTtlMs: number;
@@ -168,6 +184,11 @@ export const loadConfig = (): AppConfig => {
     failureBackoffMaxMs: parsed.SETTLEMENT_FAILURE_BACKOFF_MAX_MS,
     settlementContractAddress: parsed.SETTLEMENT_CONTRACT_ADDRESS,
     ethereumRpcUrl: parsed.ETHEREUM_RPC_URL,
+    ethereumRpcUrls: [
+      parsed.ETHEREUM_RPC_URL,
+      parsed.ETHEREUM_RPC_URL_SECONDARY,
+      parsed.ETHEREUM_RPC_URL_TERTIARY,
+    ].filter((url): url is string => Boolean(url)),
     settlementPrivateKey: parsed.SETTLEMENT_PRIVATE_KEY,
     ethereumChainId: parsed.ETHEREUM_CHAIN_ID,
     nonceLockTtlMs: parsed.NONCE_LOCK_TTL_MS,
