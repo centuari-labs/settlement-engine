@@ -59,7 +59,6 @@ const createTestAppConfig = (overrides?: Partial<AppConfig>): AppConfig => ({
   failureBackoffBaseMs: 1000,
   failureBackoffMaxMs: 60000,
   settlementContractAddress: '0x1234567890123456789012345678901234567890',
-  ethereumRpcUrl: 'https://rpc.example.com',
   ethereumRpcUrls: ['https://rpc.example.com'],
   settlementPrivateKey:
     'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',

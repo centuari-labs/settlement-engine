@@ -817,7 +817,7 @@ export const settleBatch = async (
       retryDelayMs,
       settlementContractAddress: config.settlementContractAddress,
       ethereumChainId: config.ethereumChainId,
-      ethereumRpcUrl: config.ethereumRpcUrl,
+      ethereumRpcUrl: config.ethereumRpcUrls[0],
       rpcEndpointCount: config.ethereumRpcUrls.length,
     },
     'Settling batch',

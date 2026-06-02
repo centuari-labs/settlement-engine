@@ -39,7 +39,6 @@ export const createTestConfig = (overrides?: Partial<AppConfig>): AppConfig => {
     settlementContractAddress:
       process.env.SETTLEMENT_CONTRACT_ADDRESS ||
       '0x0000000000000000000000000000000000000000',
-    ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || 'http://localhost:8545',
     ethereumRpcUrls: [process.env.ETHEREUM_RPC_URL || 'http://localhost:8545'],
     settlementPrivateKey:
       process.env.SETTLEMENT_PRIVATE_KEY ||

@@ -143,7 +143,6 @@ export type AppConfig = {
   readonly failureBackoffBaseMs: number;
   readonly failureBackoffMaxMs: number;
   readonly settlementContractAddress: string;
-  readonly ethereumRpcUrl: string;
   /**
    * Ordered RPC endpoints for the Viem fallback transport (primary first).
    * A single entry yields a plain http transport; multiple entries enable
@@ -183,7 +182,6 @@ export const loadConfig = (): AppConfig => {
     failureBackoffBaseMs: parsed.SETTLEMENT_FAILURE_BACKOFF_BASE_MS,
     failureBackoffMaxMs: parsed.SETTLEMENT_FAILURE_BACKOFF_MAX_MS,
     settlementContractAddress: parsed.SETTLEMENT_CONTRACT_ADDRESS,
-    ethereumRpcUrl: parsed.ETHEREUM_RPC_URL,
     ethereumRpcUrls: [
       parsed.ETHEREUM_RPC_URL,
       parsed.ETHEREUM_RPC_URL_SECONDARY,

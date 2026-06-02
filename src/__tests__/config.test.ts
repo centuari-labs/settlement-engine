@@ -93,7 +93,6 @@ describe('loadConfig', () => {
     it('should expose a single-element list when only the primary is set', () => {
       const config = loadConfig();
       expect(config.ethereumRpcUrls).toEqual(['https://rpc.example.com']);
-      expect(config.ethereumRpcUrl).toBe('https://rpc.example.com');
     });
 
     it('should order primary, secondary, tertiary when all are set', () => {
