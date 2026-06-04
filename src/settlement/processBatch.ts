@@ -14,6 +14,7 @@ import {
   getPool,
   readPendingCollateralFlagsForBorrowers,
   quarantineFailedMatch,
+  writebackSettledMatches,
   POISON_FAILURE_REASON,
   type DatabaseError,
 } from './database';
@@ -102,6 +103,70 @@ const ackAndDeleteEntries = async (
 };
 
 /**
+ * Sentinel `settled_tx_hash` for a ghost-settled match (H1).
+ *
+ * On a retry where the match is already settled on-chain (`isSettled == true`)
+ * but our prior writeback never flipped PENDING -> SETTLED, we don't have the
+ * original settlement tx hash to hand to the lock-release writeback. We stamp
+ * this sentinel so the row is auditably marked as recovered by the
+ * already-settled fast-path rather than a fresh in-process settlement.
+ */
+export const GHOST_SETTLED_TX_HASH = 'ghost-settled-recovered';
+
+/**
+ * H1 — release stranded `in_orders` for matches the retry path found already
+ * settled on-chain. The original ACK/XDEL fast-path skipped the lock-release
+ * decrement, so `in_orders` stayed over-counted forever. `writebackSettledMatches`
+ * is idempotent: its inner `UPDATE matches ... WHERE settlement_status='PENDING'`
+ * returns 0 rows (and fires no decrement) for any match already SETTLED, so it
+ * is safe to run on every already-settled match — it decrements exactly once,
+ * on the first transition, and no-ops on every subsequent retry.
+ *
+ * Best-effort: a failure here is logged but NOT thrown. The on-chain settlement
+ * is already final, so we must still ACK/XDEL to stop infinite redelivery; any
+ * row left PENDING is picked up by the stuck-PENDING reconciliation sweeper.
+ */
+const releaseLocksForAlreadySettled = async (
+  alreadySettled: readonly MatchWithMeta[],
+): Promise<void> => {
+  if (alreadySettled.length === 0) {
+    return;
+  }
+  try {
+    const settledMatchIds = new Set(
+      alreadySettled.map((m) => m.payload.matchId),
+    );
+    const result = await writebackSettledMatches(
+      getPool(),
+      alreadySettled.map((m) => m.payload),
+      settledMatchIds,
+      GHOST_SETTLED_TX_HASH,
+    );
+    logger.info(
+      {
+        component: 'process-settlement-batch',
+        count: alreadySettled.length,
+        released: result.settled,
+        alreadyReleased: result.alreadySettled,
+      },
+      'Released locks for already-settled matches (H1)',
+    );
+  } catch (error) {
+    // On-chain settlement is final; do not block the ACK/XDEL below. The
+    // stuck-PENDING reconciliation sweeper is the backstop for any row this
+    // leaves behind.
+    logger.error(
+      {
+        component: 'process-settlement-batch',
+        count: alreadySettled.length,
+        err: (error as Error).message,
+      },
+      'Failed to release locks for already-settled matches (H1) — ACKing anyway',
+    );
+  }
+};
+
+/**
  * Quarantine poison matches (Track C8): mark each FAILED + restore orders +
  * release its `in_orders` lock in one atomic tx (`quarantineFailedMatch`), then
  * ACK/XDEL its Redis entry so it is never redelivered into a future batch.
@@ -171,6 +236,11 @@ export const processSettlementBatch = async (
   );
 
   if (alreadySettled.length > 0) {
+    // H1: run the idempotent lock-release BEFORE ACK/XDEL. The ghost-settled
+    // retry path (tx mined, but writeback threw before the PENDING -> SETTLED
+    // flip) would otherwise ACK/XDEL these without ever decrementing
+    // `in_orders`, stranding the reservation forever.
+    await releaseLocksForAlreadySettled(alreadySettled);
     await ackAndDeleteEntries(context, alreadySettled);
     logger.info(
       { component: 'process-settlement-batch', count: alreadySettled.length },
@@ -312,7 +382,21 @@ export const processSettlementBatch = async (
 
   let settlementResult;
   try {
-    // Step 1: Call smart contract to settle the batch
+    // Step 1: Call smart contract to settle the batch.
+    //
+    // KNOWN, ACCEPTED TOCTOU (M5): there is a check-to-use gap between the
+    // poison-isolation dry-run above (Step 0.75 — an off-chain `simulateContract`
+    // / eth_call against the current head) and this live `settleBatch` tx. State
+    // can change in that window (a collateral unflag lands, an oracle price moves,
+    // another settler races a match), so a match that simulated clean can still
+    // revert on-chain — and, conversely, a match flagged poison could have become
+    // settleable. We deliberately do NOT try to close this gap with a lock or a
+    // single atomic call: the on-chain contract is the final authority. If the
+    // live tx reverts, the batch stays PENDING and is retried (poison isolation
+    // re-runs against fresh state on the next pass); a genuinely-stuck match is
+    // ultimately caught by the stuck-PENDING reconciliation sweeper (Track C2).
+    // The dry-run is a best-effort filter to keep one poison match from blocking
+    // a whole batch, not a correctness guarantee.
     const startTime = Date.now();
     settlementResult = await settleBatch({
       matches: toSettle.map((m) => m.payload),

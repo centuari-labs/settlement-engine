@@ -29,6 +29,23 @@ import type { NonceManager } from './nonceManager';
 import { logger } from '../logger';
 
 /**
+ * Reduce an RPC URL to just its host for logging. Provider RPC URLs embed the
+ * API key in the path (and sometimes the query string), so the full URL must
+ * never reach logs (M1). Falls back to a static placeholder if the URL can't
+ * be parsed — we never echo the raw string on failure.
+ */
+export const rpcHostForLogging = (url: string | undefined): string => {
+  if (!url) {
+    return '<none>';
+  }
+  try {
+    return new URL(url).host;
+  } catch {
+    return '<unparseable-rpc-url>';
+  }
+};
+
+/**
  * Parsed BondTokenCreated event from settlement tx receipt.
  */
 export interface ParsedBondToken {
@@ -817,7 +834,9 @@ export const settleBatch = async (
       retryDelayMs,
       settlementContractAddress: config.settlementContractAddress,
       ethereumChainId: config.ethereumChainId,
-      ethereumRpcUrl: config.ethereumRpcUrls[0],
+      // Log only the RPC host, never the full URL — the primary endpoint
+      // embeds the provider API key in the path/query (M1).
+      ethereumRpcHost: rpcHostForLogging(config.ethereumRpcUrls[0]),
       rpcEndpointCount: config.ethereumRpcUrls.length,
     },
     'Settling batch',

@@ -8,7 +8,7 @@ import {
 import { getRedisClient, closeRedisClient } from '../../redis/client';
 import { cleanupTestStreams } from '../../tests/helpers/redisTestClient';
 import { createTestConfig } from '../../tests/helpers/testConfig';
-import { applySettlementResult } from '../database';
+import { applySettlementResult, writebackSettledMatches } from '../database';
 import { filterAlreadySettledMatches, settleBatch } from '../smartContract';
 import { setupMockSettleBatch, getMockSettleBatch, setupMockSettleBatchError, createSettlementError } from '../../tests/helpers/mockSmartContract';
 import { logger } from '../../logger';
@@ -20,6 +20,10 @@ const mockSettleBatch = getMockSettleBatch();
 const mockApplySettlementResult = applySettlementResult as jest.MockedFunction<
   typeof applySettlementResult
 >;
+const mockWritebackSettledMatches =
+  writebackSettledMatches as jest.MockedFunction<
+    typeof writebackSettledMatches
+  >;
 
 /**
  * Integration tests for batch settlement processing using a real Redis instance.
@@ -78,6 +82,10 @@ describe('processSettlementBatch', () => {
     // Set up default successful mocks using the mock helper
     setupMockSettleBatch(mockSettleBatch);
     mockApplySettlementResult.mockResolvedValue(undefined);
+    mockWritebackSettledMatches.mockResolvedValue({
+      settled: 0,
+      alreadySettled: 0,
+    });
   });
 
   afterEach(async () => {
@@ -450,6 +458,169 @@ describe('processSettlementBatch', () => {
 
       // settleBatch should NOT have been called (all matches were already settled)
       expect(mockSettleBatch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('H1: ghost-settled lock release', () => {
+    /**
+     * Scenario: a prior attempt mined the settlement tx on-chain, but the
+     * writeback threw BEFORE flipping matches.settlement_status PENDING ->
+     * SETTLED. On retry, filterAlreadySettledMatches sees isSettled == true and
+     * routes the match to `alreadySettled`. Before this fix the match was
+     * ACKed/XDELed without ever releasing its `in_orders` lock, stranding the
+     * reservation forever. Assert the idempotent lock-release runs on the
+     * already-settled set (which decrements in_orders exactly once via its
+     * PENDING-guarded UPDATE) BEFORE the entry is ACKed.
+     */
+    it('runs lock-release for already-settled matches before ACK/XDEL', async () => {
+      const mockFilter = filterAlreadySettledMatches as jest.MockedFunction<
+        typeof filterAlreadySettledMatches
+      >;
+
+      const match = createMatch({
+        matchId: '550e8400-e29b-41d4-a716-44665544aa01',
+      });
+      const entryId = await redis.xadd(
+        context.stream,
+        '*',
+        'data',
+        JSON.stringify(match),
+      );
+      if (!entryId) throw new Error('Failed to add entry');
+
+      const matchMeta = createMatchWithMeta(match, {
+        id: entryId,
+        stream: context.stream,
+      });
+
+      // Ghost-settled: filter routes this match to alreadySettled (isSettled).
+      mockFilter.mockResolvedValueOnce({
+        unsettled: [],
+        alreadySettled: [matchMeta],
+      });
+
+      // Track ordering: lock-release must run before the entry is XDELed.
+      const callOrder: string[] = [];
+      mockWritebackSettledMatches.mockImplementationOnce(async () => {
+        callOrder.push('writeback');
+        return { settled: 1, alreadySettled: 0 };
+      });
+      const realXdel = redis.xdel.bind(redis);
+      const orderedXdelSpy = jest
+        .spyOn(redis, 'xdel')
+        .mockImplementation(((...args: Parameters<typeof realXdel>) => {
+          callOrder.push('xdel');
+          return realXdel(...args);
+        }) as never);
+
+      await processSettlementBatch([matchMeta], context, testConfig);
+
+      // Lock-release was invoked exactly once with the already-settled match,
+      // the correct settledMatchIds set, and the ghost-settled sentinel hash.
+      expect(mockWritebackSettledMatches).toHaveBeenCalledTimes(1);
+      const [, matchesArg, idSetArg, txHashArg] =
+        mockWritebackSettledMatches.mock.calls[0];
+      expect(matchesArg).toEqual([match]);
+      expect(idSetArg).toBeInstanceOf(Set);
+      expect((idSetArg as Set<string>).has(match.matchId)).toBe(true);
+      expect(typeof txHashArg).toBe('string');
+
+      // Ordering: decrement (writeback) happened before the XDEL that removes
+      // the Redis entry — so we never ACK away a stranded lock.
+      expect(callOrder.indexOf('writeback')).toBeGreaterThanOrEqual(0);
+      expect(callOrder.indexOf('xdel')).toBeGreaterThan(
+        callOrder.indexOf('writeback'),
+      );
+
+      // settleBatch is NOT re-submitted (already settled on-chain).
+      expect(mockSettleBatch).not.toHaveBeenCalled();
+
+      // Entry was ACKed + deleted.
+      const length = await redis.xlen(context.stream);
+      expect(length).toBe(0);
+
+      orderedXdelSpy.mockRestore();
+    });
+
+    it('idempotent: a second retry on the same already-settled match no-ops the decrement', async () => {
+      const mockFilter = filterAlreadySettledMatches as jest.MockedFunction<
+        typeof filterAlreadySettledMatches
+      >;
+
+      const match = createMatch({
+        matchId: '550e8400-e29b-41d4-a716-44665544aa02',
+      });
+      const entryId = await redis.xadd(
+        context.stream,
+        '*',
+        'data',
+        JSON.stringify(match),
+      );
+      if (!entryId) throw new Error('Failed to add entry');
+
+      const matchMeta = createMatchWithMeta(match, {
+        id: entryId,
+        stream: context.stream,
+      });
+
+      mockFilter.mockResolvedValueOnce({
+        unsettled: [],
+        alreadySettled: [matchMeta],
+      });
+
+      // The PENDING-guarded UPDATE inside writebackSettledMatches already
+      // transitioned this match on a prior run, so a retry reports 0 settled
+      // (no decrement fired). processSettlementBatch must still complete and ACK.
+      mockWritebackSettledMatches.mockResolvedValueOnce({
+        settled: 0,
+        alreadySettled: 1,
+      });
+
+      await processSettlementBatch([matchMeta], context, testConfig);
+
+      expect(mockWritebackSettledMatches).toHaveBeenCalledTimes(1);
+      const length = await redis.xlen(context.stream);
+      expect(length).toBe(0);
+    });
+
+    it('still ACKs the already-settled match if lock-release throws (on-chain is final)', async () => {
+      const mockFilter = filterAlreadySettledMatches as jest.MockedFunction<
+        typeof filterAlreadySettledMatches
+      >;
+
+      const match = createMatch({
+        matchId: '550e8400-e29b-41d4-a716-44665544aa03',
+      });
+      const entryId = await redis.xadd(
+        context.stream,
+        '*',
+        'data',
+        JSON.stringify(match),
+      );
+      if (!entryId) throw new Error('Failed to add entry');
+
+      const matchMeta = createMatchWithMeta(match, {
+        id: entryId,
+        stream: context.stream,
+      });
+
+      mockFilter.mockResolvedValueOnce({
+        unsettled: [],
+        alreadySettled: [matchMeta],
+      });
+
+      // Lock-release fails transiently — must NOT block the ACK/XDEL, otherwise
+      // the entry would redeliver forever despite being settled on-chain.
+      mockWritebackSettledMatches.mockRejectedValueOnce(
+        new Error('transient db error'),
+      );
+
+      await expect(
+        processSettlementBatch([matchMeta], context, testConfig),
+      ).resolves.toBeUndefined();
+
+      const length = await redis.xlen(context.stream);
+      expect(length).toBe(0);
     });
   });
 

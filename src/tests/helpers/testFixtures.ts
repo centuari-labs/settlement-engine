@@ -19,13 +19,18 @@ export const createMatch = (overrides?: Partial<Match>): Match => {
     matchedAmount: '1000000',
     rate: 5000,
     loanToken: '0x1111111111111111111111111111111111111111',
-    maturity: 1735689600,
+    // Far-future maturity (2099-01-01) — schema now requires a future
+    // unix-seconds maturity (M4), so a fixed future constant keeps fixtures
+    // deterministic without ever drifting into the past.
+    maturity: 4070908800,
     timestamp: 1704067200,
     borrowerIsTaker: true,
-    makerFeeAmount: '0',
-    takerFeeAmount: '0',
-    lenderSettlementFeeAmount: '0',
-    borrowerSettlementFeeAmount: '0',
+    // Fee/amount digit fields must now be positive integers (no '0') per the
+    // tightened schema (M3). Use a representative non-zero default.
+    makerFeeAmount: '1000',
+    takerFeeAmount: '1000',
+    lenderSettlementFeeAmount: '1000',
+    borrowerSettlementFeeAmount: '1000',
   };
 
   const match = { ...defaults, ...overrides };
