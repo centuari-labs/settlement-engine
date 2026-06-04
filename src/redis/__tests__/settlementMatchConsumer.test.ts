@@ -164,6 +164,64 @@ describe('readMatches', () => {
     });
   });
 
+  it('should ignore dangerous field names in individual field payloads', async () => {
+    const match = createMatch();
+    const entryId = await redis.xadd(
+      config.settlementMatchesStream,
+      '*',
+      '__proto__',
+      '{"polluted":true}',
+      'matchId',
+      match.matchId,
+      'marketId',
+      match.marketId,
+      'lendOrderId',
+      match.lendOrderId,
+      'borrowOrderId',
+      match.borrowOrderId,
+      'lenderWallet',
+      match.lenderWallet,
+      'borrowerWallet',
+      match.borrowerWallet,
+      'matchedAmount',
+      match.matchedAmount,
+      'rate',
+      String(match.rate),
+      'loanToken',
+      match.loanToken,
+      'maturity',
+      String(match.maturity),
+      'timestamp',
+      String(match.timestamp),
+      'borrowerIsTaker',
+      String(match.borrowerIsTaker),
+      'makerFeeAmount',
+      String(match.makerFeeAmount),
+      'takerFeeAmount',
+      String(match.takerFeeAmount),
+      'lenderSettlementFeeAmount',
+      String(match.lenderSettlementFeeAmount),
+      'borrowerSettlementFeeAmount',
+      String(match.borrowerSettlementFeeAmount),
+    );
+
+    const matches = await readMatches({
+      redis,
+      stream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: config.consumerName,
+      readCount: config.readCount,
+    });
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toEqual({
+      id: entryId,
+      stream: config.settlementMatchesStream,
+      payload: match,
+    });
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
   it('should handle invalid JSON in data field', async () => {
     const entryId = await redis.xadd(
       config.settlementMatchesStream,
