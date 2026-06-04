@@ -5,6 +5,26 @@ import { logger } from '../logger';
 type StreamEntry = [string, string[]];
 type StreamReadResult = [string, StreamEntry[]][];
 
+const STREAM_FIELD_KEYS = new Set([
+  'data',
+  'matchId',
+  'marketId',
+  'lendOrderId',
+  'borrowOrderId',
+  'lenderWallet',
+  'borrowerWallet',
+  'matchedAmount',
+  'rate',
+  'loanToken',
+  'maturity',
+  'timestamp',
+  'borrowerIsTaker',
+  'makerFeeAmount',
+  'takerFeeAmount',
+  'lenderSettlementFeeAmount',
+  'borrowerSettlementFeeAmount',
+]);
+
 export interface MatchWithMeta {
   readonly id: string;
   readonly stream: string;
@@ -77,11 +97,11 @@ export const ensureConsumerGroup = async (
 };
 
 const fieldsArrayToObject = (fields: string[]): Record<string, string> => {
-  const result: Record<string, string> = {};
+  const result: Record<string, string> = Object.create(null);
   for (let index = 0; index < fields.length; index += 2) {
     const key = fields[index] ?? '';
-    const value = fields[index + 1] ?? '';
-    if (key) {
+    const value = fields[index + 1];
+    if (key && value !== undefined && STREAM_FIELD_KEYS.has(key)) {
       result[key] = value;
     }
   }
@@ -125,7 +145,7 @@ const convertFieldsToMatch = (fields: Record<string, string>): unknown => {
  * - all fields of the match are stored directly as stream fields; or
  * - a single field `data` contains a JSON string of the full payload.
  */
-const parseMatchEntry = (
+export const parseMatchEntry = (
   entry: StreamEntry,
 ): { id: string; value: Match } | null => {
   const [id, rawFields] = entry;
@@ -485,5 +505,3 @@ export const processPendingEntriesOnStartup = async (
     xclaimMinIdleMs,
   );
 };
-
-
