@@ -18,6 +18,7 @@ import { BatchAccumulator } from './settlement/batchAccumulator';
 import { BatchProcessor } from './settlement/batchProcessor';
 import { createNonceManager } from './settlement/nonceManager';
 import { SettlementSweeper } from './settlement/settlementSweeper';
+import { createInvalidEntryHandler } from './redis/deadLetter';
 import { logger } from './logger';
 
 const main = async (): Promise<void> => {
@@ -37,6 +38,9 @@ const main = async (): Promise<void> => {
     config.batchIntervalMs,
   );
 
+  // Dead-letter handler for schema-invalid stream entries (L5).
+  const onInvalid = createInvalidEntryHandler(redis);
+
   // Process pending entries on startup and add them to accumulator
   const readMatchesOptions: ReadMatchesOptions = {
     redis,
@@ -46,6 +50,7 @@ const main = async (): Promise<void> => {
     readCount: config.readCount,
     maxEntries: config.batchSize * 3,
     xclaimMinIdleMs: config.xclaimMinIdleMs,
+    onInvalid,
   };
 
   try {
@@ -76,6 +81,7 @@ const main = async (): Promise<void> => {
     config,
     accumulator,
     nonceManager,
+    onInvalid,
   });
 
   batchProcessor.start();

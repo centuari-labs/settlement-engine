@@ -74,7 +74,20 @@ export const REDIS_STREAMS = {
    * Stream for settlement matches to be consumed by Settlement Engine.
    */
   SETTLEMENT_MATCHES: 'settlement:matches',
+  /**
+   * Dead-letter stream for match entries that fail schema validation.
+   * Invalid entries are XADDed here (with the raw payload + error) before
+   * being ACKed off the live stream, so they are inspectable instead of
+   * silently lost (L5).
+   */
+  SETTLEMENT_MATCHES_DEAD: 'settlement:matches:dead',
 } as const;
+
+/**
+ * MAXLEN bound (approximate, `~`) for the dead-letter stream so it cannot
+ * grow without limit.
+ */
+export const SETTLEMENT_MATCHES_DEAD_MAXLEN = 10000;
 
 /**
  * Redis consumer group configuration.
