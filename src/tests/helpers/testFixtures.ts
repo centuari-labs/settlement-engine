@@ -11,7 +11,10 @@ import { matchSchema } from '../../schemas/match';
 export const createMatch = (overrides?: Partial<Match>): Match => {
   const defaults: Match = {
     matchId: '550e8400-e29b-41d4-a716-446655440000',
-    marketId: '660e8400-e29b-41d4-a716-446655440099',
+    // bytes32 on-chain market key (C4): the matching engine identifies markets by
+    // the bytes32 the contract uses as its storage key, not a UUID.
+    marketId:
+      '0x660e8400e29b41d4a716446655440099000000000000000000000000000000aa',
     lendOrderId: '550e8400-e29b-41d4-a716-446655440001',
     borrowOrderId: '550e8400-e29b-41d4-a716-446655440002',
     lenderWallet: '0x1234567890123456789012345678901234567890',

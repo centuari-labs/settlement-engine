@@ -154,9 +154,16 @@ export const parseMatchEntry = (
   let candidate: unknown = fieldsObject;
 
   if (fieldsObject.data) {
-    // If there's a 'data' field, try to parse it as JSON
+    // If there's a 'data' field, parse it as JSON, then coerce numeric/boolean
+    // fields. The matching engine serialises rate/maturity/timestamp/
+    // borrowerIsTaker as STRINGS inside the JSON payload, which z.number()/
+    // z.boolean() would reject — so every match would dead-letter. The coercion
+    // must run on BOTH the JSON-`data` path and the flat-fields path, not just
+    // the latter (regression: settlement silently dead-lettered every match).
     try {
-      candidate = JSON.parse(fieldsObject.data);
+      candidate = convertFieldsToMatch(
+        JSON.parse(fieldsObject.data) as Record<string, string>,
+      );
     } catch {
       // Fall back to using the field object as-is.
       candidate = fieldsObject;
