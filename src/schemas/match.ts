@@ -64,7 +64,13 @@ const nonNegativeUint256String = (label: string) =>
  */
 export const matchSchema = z.object({
   matchId: z.string().uuid('Match ID must be a valid UUID'),
-  marketId: z.string().uuid('Market ID must be a valid UUID'),
+  // marketId is the on-chain bytes32 market key (C4 UUID→BYTEA migration): the
+  // matching engine + backend identify markets by the bytes32 the contract uses
+  // as the storage key (NOT a UUID). settleMatch/repay/withdraw all key on it
+  // verbatim, so it must be carried through unchanged — see encodeMatchData.
+  marketId: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{64}$/, 'Market ID must be a 32-byte hex string (0x + 64 hex)'),
   lendOrderId: z.string().uuid('Lend order ID must be a valid UUID'),
   borrowOrderId: z.string().uuid('Borrow order ID must be a valid UUID'),
   lenderWallet: ethereumAddressSchema,

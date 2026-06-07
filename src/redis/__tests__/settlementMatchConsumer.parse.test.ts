@@ -45,6 +45,24 @@ describe('parseMatchEntry', () => {
     expect(parsed).toEqual({ id: '1-0', value: match });
   });
 
+  it('coerces string-typed numeric/boolean fields in a JSON data payload (matching-engine wire format)', () => {
+    const match = createMatch();
+    // The matching engine serialises rate/maturity/timestamp/borrowerIsTaker as
+    // STRINGS inside the JSON payload. Without coercion on the JSON path these
+    // fail z.number()/z.boolean() and the match is dead-lettered (regression).
+    const wire = {
+      ...match,
+      rate: String(match.rate),
+      maturity: String(match.maturity),
+      timestamp: String(match.timestamp),
+      borrowerIsTaker: String(match.borrowerIsTaker),
+    };
+
+    const parsed = parseMatchEntry(['1-0', ['data', JSON.stringify(wire)]]);
+
+    expect(parsed).toEqual({ id: '1-0', value: match });
+  });
+
   it('should ignore dangerous field names in flat field payloads', () => {
     const match = createMatch();
 
