@@ -16,19 +16,48 @@ export const ethereumAddressSchema = z
 const UINT256_MAX = 2n ** 256n - 1n;
 
 /**
- * Validator for a positive integer amount/fee field carried as a decimal
+ * Throw-safe uint256 upper-bound check. `BigInt("abc")` throws, and a throw
+ * inside a `.refine` propagates out of `safeParse` instead of yielding a clean
+ * validation failure — which would crash the consumer rather than dead-letter a
+ * malformed entry. Guarded so any non-numeric input simply fails validation.
+ */
+const withinUint256 = (v: string): boolean => {
+  try {
+    return BigInt(v) <= UINT256_MAX;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Validator for a strictly-positive integer amount field carried as a decimal
  * string (BigInt money math — never `number`). Hardening (M3):
  *   - regex `^[1-9]\d*$` rejects `"0"` and any leading-zero form (`"007"`),
  *     which the previous `^\d+$` accepted.
- *   - `.refine` rejects any value that would overflow uint256 on-chain.
+ *   - bound-check rejects any value that would overflow uint256 on-chain.
+ * Use for `matchedAmount`, where zero is never a valid match.
  */
 const positiveUint256String = (label: string) =>
   z
     .string()
     .regex(/^[1-9]\d*$/, `${label} must be a positive integer string (no zero/leading zeros)`)
-    .refine((v) => BigInt(v) <= UINT256_MAX, {
-      message: `${label} must not exceed uint256 max`,
-    });
+    .refine(withinUint256, { message: `${label} must not exceed uint256 max` });
+
+/**
+ * Validator for a NON-negative integer fee field carried as a decimal string.
+ * Unlike `matchedAmount`, a zero fee is legitimate: `BigInt.toString()` yields
+ * `"0"` for a 0-bps fee or one that floors to zero on a small fill, and the
+ * matching engine emits it verbatim. Rejecting `"0"` here would dead-letter the
+ * match and permanently strand the `user_balance.in_orders` lock taken at match
+ * time (the C2 sweeper only recovers DB-`PENDING` rows, not dead-lettered ones).
+ *   - regex `^(0|[1-9]\d*)$` accepts `"0"` but still rejects leading-zero forms.
+ *   - bound-check rejects uint256 overflow.
+ */
+const nonNegativeUint256String = (label: string) =>
+  z
+    .string()
+    .regex(/^(0|[1-9]\d*)$/, `${label} must be a non-negative integer string (no leading zeros)`)
+    .refine(withinUint256, { message: `${label} must not exceed uint256 max` });
 
 /**
  * Schema representing a single match produced by the Matching Engine.
@@ -60,10 +89,10 @@ export const matchSchema = z.object({
     }),
   timestamp: z.number().int().positive('Timestamp must be a positive integer'),
   borrowerIsTaker: z.boolean(),
-  makerFeeAmount: positiveUint256String('Maker fee amount'),
-  takerFeeAmount: positiveUint256String('Taker fee amount'),
-  lenderSettlementFeeAmount: positiveUint256String('Lender settlement fee amount'),
-  borrowerSettlementFeeAmount: positiveUint256String('Borrower settlement fee amount'),
+  makerFeeAmount: nonNegativeUint256String('Maker fee amount'),
+  takerFeeAmount: nonNegativeUint256String('Taker fee amount'),
+  lenderSettlementFeeAmount: nonNegativeUint256String('Lender settlement fee amount'),
+  borrowerSettlementFeeAmount: nonNegativeUint256String('Borrower settlement fee amount'),
 });
 
 /**
