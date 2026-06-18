@@ -47,8 +47,38 @@ const configSchema = z.object({
     .transform((value) => Number(value || 200))
     .pipe(z.number().int().positive())
     .default('200'),
+  SETTLEMENT_PENDING_RECLAIM_INTERVAL_MS: z
+    .string()
+    .transform((value) => Number(value || 60000))
+    .pipe(z.number().int().positive())
+    .default('60000'),
+  REDIS_XCLAIM_MIN_IDLE_MS: z
+    .string()
+    .transform((value) => Number(value || 60000))
+    .pipe(z.number().int().positive())
+    .default('60000'),
+  SETTLEMENT_FAILURE_BACKOFF_BASE_MS: z
+    .string()
+    .transform((value) => Number(value || 1000))
+    .pipe(z.number().int().positive())
+    .default('1000'),
+  SETTLEMENT_FAILURE_BACKOFF_MAX_MS: z
+    .string()
+    .transform((value) => Number(value || 60000))
+    .pipe(z.number().int().positive())
+    .default('60000'),
   SETTLEMENT_CONTRACT_ADDRESS: ethereumAddressSchema,
   ETHEREUM_RPC_URL: z.string().url('RPC URL must be a valid URL'),
+  // Optional secondary/tertiary RPCs for Viem fallback failover (Track D3).
+  // Intended ordering: primary=Alchemy, secondary=Infura, tertiary=QuickNode.
+  ETHEREUM_RPC_URL_SECONDARY: z
+    .string()
+    .url('Secondary RPC URL must be a valid URL')
+    .optional(),
+  ETHEREUM_RPC_URL_TERTIARY: z
+    .string()
+    .url('Tertiary RPC URL must be a valid URL')
+    .optional(),
   SETTLEMENT_PRIVATE_KEY: z
     .string()
     .regex(
@@ -60,6 +90,41 @@ const configSchema = z.object({
     .transform((value) => Number(value || 1))
     .pipe(z.number().int().positive())
     .default('1'),
+  NONCE_LOCK_TTL_MS: z
+    .string()
+    .transform((value) => Number(value || 30000))
+    .pipe(z.number().int().positive())
+    .default('30000'),
+  TX_CONFIRMATION_TIMEOUT_MS: z
+    .string()
+    .transform((value) => Number(value || 120000))
+    .pipe(z.number().int().positive())
+    .default('120000'),
+  NONCE_LOCK_RETRY_DELAY_MS: z
+    .string()
+    .transform((value) => Number(value || 500))
+    .pipe(z.number().int().positive())
+    .default('500'),
+  // Stuck-PENDING settlement sweeper (Track C2). Ships disabled by default.
+  SWEEPER_ENABLED: z
+    .string()
+    .transform((value) => value === 'true')
+    .default('false'),
+  SWEEPER_INTERVAL_MS: z
+    .string()
+    .transform((value) => Number(value || 3600000))
+    .pipe(z.number().int().positive())
+    .default('3600000'),
+  SWEEPER_STUCK_THRESHOLD_MS: z
+    .string()
+    .transform((value) => Number(value || 86400000))
+    .pipe(z.number().int().positive())
+    .default('86400000'),
+  SWEEPER_BATCH_SIZE: z
+    .string()
+    .transform((value) => Number(value || 50))
+    .pipe(z.number().int().positive())
+    .default('50'),
 });
 
 export type AppConfig = {
@@ -73,10 +138,26 @@ export type AppConfig = {
   readonly batchSize: number;
   readonly batchIntervalMs: number;
   readonly pollIntervalMs: number;
+  readonly pendingReclaimIntervalMs: number;
+  readonly xclaimMinIdleMs: number;
+  readonly failureBackoffBaseMs: number;
+  readonly failureBackoffMaxMs: number;
   readonly settlementContractAddress: string;
-  readonly ethereumRpcUrl: string;
+  /**
+   * Ordered RPC endpoints for the Viem fallback transport (primary first).
+   * A single entry yields a plain http transport; multiple entries enable
+   * automatic failover (Track D3).
+   */
+  readonly ethereumRpcUrls: string[];
   readonly settlementPrivateKey: string;
   readonly ethereumChainId: number;
+  readonly nonceLockTtlMs: number;
+  readonly txConfirmationTimeoutMs: number;
+  readonly nonceLockRetryDelayMs: number;
+  readonly sweeperEnabled: boolean;
+  readonly sweeperIntervalMs: number;
+  readonly sweeperStuckThresholdMs: number;
+  readonly sweeperBatchSize: number;
 };
 
 /**
@@ -96,10 +177,25 @@ export const loadConfig = (): AppConfig => {
     batchSize: parsed.SETTLEMENT_BATCH_SIZE,
     batchIntervalMs: parsed.SETTLEMENT_BATCH_INTERVAL_MS,
     pollIntervalMs: parsed.SETTLEMENT_POLL_INTERVAL_MS,
+    pendingReclaimIntervalMs: parsed.SETTLEMENT_PENDING_RECLAIM_INTERVAL_MS,
+    xclaimMinIdleMs: parsed.REDIS_XCLAIM_MIN_IDLE_MS,
+    failureBackoffBaseMs: parsed.SETTLEMENT_FAILURE_BACKOFF_BASE_MS,
+    failureBackoffMaxMs: parsed.SETTLEMENT_FAILURE_BACKOFF_MAX_MS,
     settlementContractAddress: parsed.SETTLEMENT_CONTRACT_ADDRESS,
-    ethereumRpcUrl: parsed.ETHEREUM_RPC_URL,
+    ethereumRpcUrls: [
+      parsed.ETHEREUM_RPC_URL,
+      parsed.ETHEREUM_RPC_URL_SECONDARY,
+      parsed.ETHEREUM_RPC_URL_TERTIARY,
+    ].filter((url): url is string => Boolean(url)),
     settlementPrivateKey: parsed.SETTLEMENT_PRIVATE_KEY,
     ethereumChainId: parsed.ETHEREUM_CHAIN_ID,
+    nonceLockTtlMs: parsed.NONCE_LOCK_TTL_MS,
+    txConfirmationTimeoutMs: parsed.TX_CONFIRMATION_TIMEOUT_MS,
+    nonceLockRetryDelayMs: parsed.NONCE_LOCK_RETRY_DELAY_MS,
+    sweeperEnabled: parsed.SWEEPER_ENABLED,
+    sweeperIntervalMs: parsed.SWEEPER_INTERVAL_MS,
+    sweeperStuckThresholdMs: parsed.SWEEPER_STUCK_THRESHOLD_MS,
+    sweeperBatchSize: parsed.SWEEPER_BATCH_SIZE,
   };
 };
 

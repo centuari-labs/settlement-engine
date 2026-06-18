@@ -102,23 +102,9 @@ describe('processSettlementBatch Integration Tests', () => {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
-        // Find settlement_items that reference our test matches
-        const settlementItems = await client.query<{ settlement_batch_id: string }>(
-          'SELECT DISTINCT settlement_batch_id FROM settlement_items WHERE match_id = ANY($1::uuid[])',
-          [insertedMatchIds],
-        );
-        const batchIds = settlementItems.rows.map((row) => row.settlement_batch_id);
-
-        // Delete settlement_items first (foreign key constraint)
-        if (batchIds.length > 0) {
-          await client.query('DELETE FROM settlement_items WHERE settlement_batch_id = ANY($1::uuid[])', [
-            batchIds,
-          ]);
-          // Delete settlement_batches
-          await client.query('DELETE FROM settlement_batches WHERE id = ANY($1::uuid[])', [batchIds]);
-        }
-
-        // Delete matches
+        // Delete the test matches. settlement_items / settlement_batches were
+        // dropped by migration 20260515120000 and the current writeback never
+        // creates them, so `matches` is the only table to clean up here.
         await client.query('DELETE FROM matches WHERE id = ANY($1::uuid[])', [insertedMatchIds]);
         await client.query('COMMIT');
       } catch (cleanupError) {

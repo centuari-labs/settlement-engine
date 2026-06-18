@@ -222,6 +222,78 @@ describe('BatchAccumulator', () => {
     });
   });
 
+  describe('maxCapacity backpressure', () => {
+    it('should stop adding matches when maxCapacity is reached', () => {
+      // batchSize=2, maxCapacity defaults to 2*5=10
+      const accumulator = new BatchAccumulator(2, 5000);
+      const matches = Array.from({ length: 15 }, () => createMatchWithMeta());
+
+      accumulator.addMatches(matches);
+
+      // Should cap at maxCapacity (10)
+      expect(accumulator.getPendingCount()).toBe(10);
+    });
+
+    it('should respect custom maxCapacity', () => {
+      const accumulator = new BatchAccumulator(5, 5000, 3);
+      const matches = Array.from({ length: 10 }, () => createMatchWithMeta());
+
+      accumulator.addMatches(matches);
+
+      expect(accumulator.getPendingCount()).toBe(3);
+    });
+
+    it('should accept more matches after getBatch clears the queue', () => {
+      const accumulator = new BatchAccumulator(2, 5000, 3);
+      const batch1 = Array.from({ length: 5 }, () => createMatchWithMeta());
+
+      accumulator.addMatches(batch1);
+      expect(accumulator.getPendingCount()).toBe(3);
+
+      accumulator.getBatch();
+      expect(accumulator.getPendingCount()).toBe(0);
+
+      const batch2 = Array.from({ length: 5 }, () => createMatchWithMeta());
+      accumulator.addMatches(batch2);
+      expect(accumulator.getPendingCount()).toBe(3);
+    });
+  });
+
+  describe('deduplication via seenIds', () => {
+    it('should skip matches with duplicate IDs', () => {
+      const accumulator = new BatchAccumulator(10, 5000);
+      const match = createMatchWithMeta();
+
+      accumulator.addMatches([match, match, match]);
+
+      expect(accumulator.getPendingCount()).toBe(1);
+    });
+
+    it('should accept matches with different IDs', () => {
+      const accumulator = new BatchAccumulator(10, 5000);
+      const match1 = createMatchWithMeta();
+      const match2 = createMatchWithMeta();
+
+      accumulator.addMatches([match1, match2]);
+
+      expect(accumulator.getPendingCount()).toBe(2);
+    });
+
+    it('should clear seenIds after getBatch', () => {
+      const accumulator = new BatchAccumulator(10, 5000);
+      const match = createMatchWithMeta();
+
+      accumulator.addMatches([match]);
+      expect(accumulator.getPendingCount()).toBe(1);
+
+      accumulator.getBatch();
+
+      // Same match can be re-added after getBatch clears seenIds
+      accumulator.addMatches([match]);
+      expect(accumulator.getPendingCount()).toBe(1);
+    });
+  });
+
   describe('getPendingCount', () => {
     it('should return correct queue length', () => {
       const accumulator = new BatchAccumulator(10, 5000);

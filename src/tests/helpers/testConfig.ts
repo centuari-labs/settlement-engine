@@ -32,14 +32,25 @@ export const createTestConfig = (overrides?: Partial<AppConfig>): AppConfig => {
     batchSize: 10,
     batchIntervalMs: 5000,
     pollIntervalMs: 200,
+    pendingReclaimIntervalMs: 60000,
+    xclaimMinIdleMs: 60000,
+    failureBackoffBaseMs: 1000,
+    failureBackoffMaxMs: 60000,
     settlementContractAddress:
       process.env.SETTLEMENT_CONTRACT_ADDRESS ||
       '0x0000000000000000000000000000000000000000',
-    ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || 'http://localhost:8545',
+    ethereumRpcUrls: [process.env.ETHEREUM_RPC_URL || 'http://localhost:8545'],
     settlementPrivateKey:
       process.env.SETTLEMENT_PRIVATE_KEY ||
       '0x0000000000000000000000000000000000000000000000000000000000000001',
     ethereumChainId: Number(process.env.ETHEREUM_CHAIN_ID || '1'),
+    nonceLockTtlMs: 30000,
+    txConfirmationTimeoutMs: 120000,
+    nonceLockRetryDelayMs: 500,
+    sweeperEnabled: false,
+    sweeperIntervalMs: 3600000,
+    sweeperStuckThresholdMs: 86400000,
+    sweeperBatchSize: 50,
   };
 
   return {

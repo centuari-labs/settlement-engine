@@ -1,8 +1,29 @@
 import type Redis from 'ioredis';
 import { matchSchema, type Match } from '../schemas/match';
+import { logger } from '../logger';
 
 type StreamEntry = [string, string[]];
 type StreamReadResult = [string, StreamEntry[]][];
+
+const STREAM_FIELD_KEYS = new Set([
+  'data',
+  'matchId',
+  'marketId',
+  'lendOrderId',
+  'borrowOrderId',
+  'lenderWallet',
+  'borrowerWallet',
+  'matchedAmount',
+  'rate',
+  'loanToken',
+  'maturity',
+  'timestamp',
+  'borrowerIsTaker',
+  'makerFeeAmount',
+  'takerFeeAmount',
+  'lenderSettlementFeeAmount',
+  'borrowerSettlementFeeAmount',
+]);
 
 export interface MatchWithMeta {
   readonly id: string;
@@ -44,6 +65,14 @@ export interface ReadMatchesOptions {
     readonly raw: any;
     readonly error: unknown;
   }) => Promise<void>;
+  /**
+   * Maximum total entries to load (caps memory usage). Default: readCount * 3.
+   */
+  readonly maxEntries?: number;
+  /**
+   * Minimum idle time in ms for XCLAIM (only claim entries idle this long). Default: 60000.
+   */
+  readonly xclaimMinIdleMs?: number;
 }
 
 /**
@@ -56,8 +85,7 @@ export const ensureConsumerGroup = async (
 ): Promise<void> => {
   try {
     await redis.xgroup('CREATE', stream, group, '0', 'MKSTREAM');
-    // eslint-disable-next-line no-console
-    console.log(`Created consumer group "${group}" on stream "${stream}"`);
+    logger.info({ component: 'settlement-consumer', group, stream }, 'Created consumer group');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('BUSYGROUP')) {
@@ -69,11 +97,11 @@ export const ensureConsumerGroup = async (
 };
 
 const fieldsArrayToObject = (fields: string[]): Record<string, string> => {
-  const result: Record<string, string> = {};
+  const result: Record<string, string> = Object.create(null);
   for (let index = 0; index < fields.length; index += 2) {
     const key = fields[index] ?? '';
-    const value = fields[index + 1] ?? '';
-    if (key) {
+    const value = fields[index + 1];
+    if (key && value !== undefined && STREAM_FIELD_KEYS.has(key)) {
       result[key] = value;
     }
   }
@@ -117,7 +145,7 @@ const convertFieldsToMatch = (fields: Record<string, string>): unknown => {
  * - all fields of the match are stored directly as stream fields; or
  * - a single field `data` contains a JSON string of the full payload.
  */
-const parseMatchEntry = (
+export const parseMatchEntry = (
   entry: StreamEntry,
 ): { id: string; value: Match } | null => {
   const [id, rawFields] = entry;
@@ -126,9 +154,16 @@ const parseMatchEntry = (
   let candidate: unknown = fieldsObject;
 
   if (fieldsObject.data) {
-    // If there's a 'data' field, try to parse it as JSON
+    // If there's a 'data' field, parse it as JSON, then coerce numeric/boolean
+    // fields. The matching engine serialises rate/maturity/timestamp/
+    // borrowerIsTaker as STRINGS inside the JSON payload, which z.number()/
+    // z.boolean() would reject — so every match would dead-letter. The coercion
+    // must run on BOTH the JSON-`data` path and the flat-fields path, not just
+    // the latter (regression: settlement silently dead-lettered every match).
     try {
-      candidate = JSON.parse(fieldsObject.data);
+      candidate = convertFieldsToMatch(
+        JSON.parse(fieldsObject.data) as Record<string, string>,
+      );
     } catch {
       // Fall back to using the field object as-is.
       candidate = fieldsObject;
@@ -177,11 +212,7 @@ const processEntry = async (
         error: new Error('Validation failed for match entry'),
       });
     } else {
-      // eslint-disable-next-line no-console
-      console.error(
-        '[settlement-consumer] Invalid match entry',
-        JSON.stringify({ stream, id, raw: rawFields }),
-      );
+      logger.error({ component: 'settlement-consumer', stream, id, raw: rawFields }, 'Invalid match entry');
     }
 
     // ACK invalid entries immediately to avoid blocking
@@ -249,11 +280,7 @@ export const readMatches = async (
               error: new Error('Validation failed for match entry'),
             });
           } else {
-            // eslint-disable-next-line no-console
-            console.error(
-              '[settlement-consumer] Invalid match entry',
-              JSON.stringify({ stream: streamName, id, raw: rawFields }),
-            );
+            logger.error({ component: 'settlement-consumer', stream: streamName, id, raw: rawFields }, 'Invalid match entry');
           }
 
           // ACK invalid entries immediately to avoid blocking
@@ -273,8 +300,7 @@ export const readMatches = async (
 
     return matches;
   } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error('[settlement-consumer] Error reading matches', error);
+    logger.error({ component: 'settlement-consumer', err: error }, 'Error reading matches');
     // Return empty array on error to allow graceful degradation
     return [];
   }
@@ -290,6 +316,8 @@ export const readMatches = async (
  * @param consumerName - Current consumer name.
  * @param readCount - Maximum number of entries to read per batch.
  * @param onInvalid - Optional handler for invalid entries.
+ * @param maxEntries - Maximum total entries to load (caps memory). Default: readCount * 3.
+ * @param xclaimMinIdleMs - Minimum idle time in ms for XCLAIM. Default: 60000.
  * @returns Array of valid matches from pending entries.
  */
 const processPendingEntries = async (
@@ -299,11 +327,15 @@ const processPendingEntries = async (
   consumerName: string,
   readCount: number,
   onInvalid?: ReadMatchesOptions['onInvalid'],
+  maxEntries?: number,
+  xclaimMinIdleMs: number = 60000,
 ): Promise<MatchWithMeta[]> => {
   const matches: MatchWithMeta[] = [];
+  const cap = maxEntries ?? readCount * 3;
   // First, process pending entries for the current consumer using XREADGROUP with '0'
   let hasMorePending = true;
   while (hasMorePending) {
+    if (matches.length >= cap) break;
     try {
       // Read pending entries for this consumer (using '0' instead of '>')
       const result = (await (redis.xreadgroup as (
@@ -353,8 +385,7 @@ const processPendingEntries = async (
         hasMorePending = false;
       }
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[settlement-consumer] Error processing pending entries', error);
+      logger.error({ component: 'settlement-consumer', err: error }, 'Error processing pending entries');
       hasMorePending = false;
     }
   }
@@ -362,7 +393,7 @@ const processPendingEntries = async (
   // Second, claim and process stale entries from other consumers
   // Continue claiming in batches until no more stale entries are available
   let hasMoreStaleEntries = true;
-  while (hasMoreStaleEntries) {
+  while (hasMoreStaleEntries && matches.length < cap) {
     try {
       // Get pending entry summary
       // XPENDING returns: [total, start, end, consumers]
@@ -410,14 +441,14 @@ const processPendingEntries = async (
         break;
       }
 
-      // Claim the stale entries with 0ms min idle time (claim all pending entries)
+      // Claim only entries idle long enough (abandoned by other consumers)
       const claimedEntries = (await (redis.xclaim as (
         ...args: (string | number)[]
       ) => Promise<StreamEntry[]>)(
         stream,
         consumerGroup,
         consumerName,
-        0, // 0ms = claim any pending entry regardless of idle time
+        xclaimMinIdleMs,
         ...entriesToClaim,
       )) as StreamEntry[];
 
@@ -440,8 +471,7 @@ const processPendingEntries = async (
         hasMoreStaleEntries = false;
       }
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[settlement-consumer] Error claiming stale entries', error);
+      logger.error({ component: 'settlement-consumer', err: error }, 'Error claiming stale entries');
       hasMoreStaleEntries = false;
     }
   }
@@ -460,8 +490,16 @@ const processPendingEntries = async (
 export const processPendingEntriesOnStartup = async (
   options: ReadMatchesOptions,
 ): Promise<MatchWithMeta[]> => {
-  const { redis, stream, consumerGroup, consumerName, readCount, onInvalid } =
-    options;
+  const {
+    redis,
+    stream,
+    consumerGroup,
+    consumerName,
+    readCount,
+    onInvalid,
+    maxEntries,
+    xclaimMinIdleMs,
+  } = options;
 
   return processPendingEntries(
     redis,
@@ -470,7 +508,7 @@ export const processPendingEntriesOnStartup = async (
     consumerName,
     readCount,
     onInvalid,
+    maxEntries,
+    xclaimMinIdleMs,
   );
 };
-
-

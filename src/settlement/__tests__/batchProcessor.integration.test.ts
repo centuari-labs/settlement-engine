@@ -10,15 +10,15 @@ import {
 } from '../../tests/helpers/redisTestClient';
 import { createTestConfig } from '../../tests/helpers/testConfig';
 import type { AppConfig } from '../../config';
-import { persistSettlementResults } from '../database';
+import { applySettlementResult } from '../database';
 import { setupMockSettleBatch, getMockSettleBatch } from '../../tests/helpers/mockSmartContract';
 
 // Mock database to avoid random failures
 jest.mock('../database');
 
 const mockSettleBatch = getMockSettleBatch();
-const mockPersistSettlementResults = persistSettlementResults as jest.MockedFunction<
-  typeof persistSettlementResults
+const mockApplySettlementResult = applySettlementResult as jest.MockedFunction<
+  typeof applySettlementResult
 >;
 
 /**
@@ -102,7 +102,7 @@ describe('BatchProcessor Integration Tests', () => {
 
     // Set up default successful mocks using the mock helper
     setupMockSettleBatch(mockSettleBatch);
-    mockPersistSettlementResults.mockResolvedValue(undefined);
+    mockApplySettlementResult.mockResolvedValue(undefined);
   }, 30000);
 
   afterEach(async () => {
@@ -292,21 +292,17 @@ describe('BatchProcessor Integration Tests', () => {
   }, 10000);
 
   it('should respect pollIntervalMs configuration', async () => {
-    const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+    // Spy on xreadgroup: each poll calls readMatches() which calls redis.xreadgroup.
+    // This verifies the poll interval is actually firing at the configured rate.
+    const xreadgroupSpy = jest.spyOn(redis, 'xreadgroup');
 
     processor.start();
 
-    // Wait for multiple poll intervals
+    // Wait for multiple poll intervals (pollIntervalMs = 100ms, so ~3-4 polls in 350ms)
     await new Promise((resolve) => setTimeout(resolve, 350));
 
-    // Verify polling is happening (check for log messages)
-    // The exact count depends on timing, but should be at least 2-3 polls
-    const logCalls = consoleSpy.mock.calls.filter((call) =>
-      call[0]?.toString().includes('[batch-processor]'),
-    );
-    expect(logCalls.length).toBeGreaterThan(0);
-
-    consoleSpy.mockRestore();
+    // Expect at least 2 xreadgroup calls, confirming polling is active
+    expect(xreadgroupSpy.mock.calls.length).toBeGreaterThan(1);
   }, 10000);
 
   it('should handle empty stream gracefully', async () => {
@@ -318,6 +314,99 @@ describe('BatchProcessor Integration Tests', () => {
     // Should not throw errors
     expect(accumulator.getPendingCount()).toBe(0);
   }, 10000);
+
+  it('should reclaim and process pending entries from a dead consumer via XCLAIM', async () => {
+    // Step 1: Add 3 matches to the stream
+    const matches = [
+      createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440011' }),
+      createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440012' }),
+      createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440013' }),
+    ];
+
+    for (const match of matches) {
+      await redis.xadd(
+        config.settlementMatchesStream,
+        '*',
+        'data',
+        JSON.stringify(match),
+      );
+    }
+
+    // Step 2: Simulate dead consumer — read into its PEL but never ACK
+    // Consumer name is per-call in Redis streams, not per-connection
+    await redis.xreadgroup(
+      'GROUP',
+      config.consumerGroup,
+      'dead-consumer',
+      'COUNT',
+      '10',
+      'STREAMS',
+      config.settlementMatchesStream,
+      '>',
+    );
+
+    // Step 3: Wait 200ms so entries are idle > xclaimMinIdleMs=100ms
+    await new Promise<void>((resolve) => setTimeout(resolve, 200));
+
+    // Step 4: Create reclaim processor on a different consumer, same stream+group
+    const reclaimConfig = createTestConfig({
+      settlementMatchesStream: config.settlementMatchesStream,
+      consumerGroup: config.consumerGroup,
+      consumerName: 'test-consumer-2',
+      xclaimMinIdleMs: 100,
+      pendingReclaimIntervalMs: 200,
+      batchSize: 3,
+      batchIntervalMs: 500,
+      pollIntervalMs: 100,
+      readCount: 10,
+    });
+
+    const reclaimAccumulator = new BatchAccumulator(
+      reclaimConfig.batchSize,
+      reclaimConfig.batchIntervalMs,
+    );
+
+    const reclaimProcessor = new BatchProcessor({
+      redis,
+      config: reclaimConfig,
+      accumulator: reclaimAccumulator,
+      onInvalid: jest.fn().mockResolvedValue(undefined),
+    });
+
+    try {
+      reclaimProcessor.start();
+
+      // Step 5: Poll until stream is empty (XCLAIM + process + ACK + XDEL complete)
+      let streamLength = await redis.xlen(config.settlementMatchesStream);
+      const deadline = Date.now() + 5000;
+      while (streamLength > 0 && Date.now() < deadline) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        streamLength = await redis.xlen(config.settlementMatchesStream);
+      }
+    } finally {
+      await Promise.race([
+        reclaimProcessor.stop(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('reclaimProcessor stop timeout')), 10000),
+        ),
+      ]).catch(() => {});
+    }
+
+    // Verify: stream is empty — entries were processed and deleted
+    const finalStreamLength = await redis.xlen(config.settlementMatchesStream);
+    expect(finalStreamLength).toBe(0);
+
+    // Verify: PEL is fully drained — dead-consumer has no pending entries
+    const pendingInfo = (await (redis.xpending as unknown as (
+      ...args: (string | number)[]
+    ) => Promise<[number, string, string, Array<[string, string]>] | null>)(
+      config.settlementMatchesStream,
+      config.consumerGroup,
+    )) as [number, string, string, Array<[string, string]>] | null;
+
+    const totalPending = pendingInfo ? (pendingInfo[0] as number) : 0;
+    expect(totalPending).toBe(0);
+  }, 15000);
 
   it('should accumulate matches until batch size is reached', async () => {
     // Add matches one by one

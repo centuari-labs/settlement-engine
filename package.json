@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Off-chain settlement engine service for Centuari, consuming matched orders from Redis streams.",
   "main": "dist/index.js",
+  "packageManager": "pnpm@10.29.2",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
@@ -23,10 +24,12 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@centuari-labs/on-chain-effects": "file:../on-chain-effects",
     "dotenv": "^16.4.5",
     "ioredis": "^5.4.1",
     "pg": "^8.13.0",
-    "viem": "^2.0.0",
+    "pino": "^9.0.0",
+    "viem": "^2.21.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -39,5 +42,19 @@
     "ts-jest": "^29.1.2",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.6.3"
+  },
+  "pnpm": {
+    "comments": {
+      "overrides": "Security remediation for transitive deps (audit 2026-06-08). Each override pins to the smallest patched version WITHIN the major the consumer expects, to avoid breaking the consumer (e.g. minimatch must stay 3.x so test-exclude/glob can call it as a function). See audit/dependency-scan-2026-06-08.md."
+    },
+    "overrides": {
+      "ws@<8.20.1": "^8.20.1",
+      "handlebars@<4.7.9": "^4.7.9",
+      "minimatch@<3.1.4": "^3.1.4",
+      "picomatch@<2.3.2": "^2.3.2",
+      "brace-expansion@<1.1.13": "^1.1.13",
+      "tmp@<0.2.6": "^0.2.6",
+      "diff@<4.0.4": "^4.0.4"
+    }
   }
 }

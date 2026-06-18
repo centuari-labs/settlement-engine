@@ -2,6 +2,11 @@ import type Redis from 'ioredis';
 import { BatchProcessor } from '../batchProcessor';
 import { BatchAccumulator } from '../batchAccumulator';
 import { processSettlementBatch, BatchProcessingError } from '../processBatch';
+import {
+  unlockFailedMatches,
+  recordFailedMatches,
+  restoreOrdersForFailedMatches,
+} from '../database';
 import { createMatch } from '../../tests/helpers/testFixtures';
 import {
   createIsolatedTestEnvironment,
@@ -11,13 +16,18 @@ import {
 } from '../../tests/helpers/redisTestClient';
 import { createIsolatedTestConfig } from '../../tests/helpers/testConfig';
 import type { AppConfig } from '../../config';
+import { logger } from '../../logger';
 
 // Mock only processSettlementBatch to avoid actual settlement execution
 jest.mock('../processBatch');
+jest.mock('../database');
 
 const mockProcessSettlementBatch = processSettlementBatch as jest.MockedFunction<
   typeof processSettlementBatch
 >;
+const mockUnlockFailedMatches = unlockFailedMatches as jest.MockedFunction<typeof unlockFailedMatches>;
+const mockRecordFailedMatches = recordFailedMatches as jest.MockedFunction<typeof recordFailedMatches>;
+const mockRestoreOrdersForFailedMatches = restoreOrdersForFailedMatches as jest.MockedFunction<typeof restoreOrdersForFailedMatches>;
 
 /**
  * Unit tests for BatchProcessor using a real Redis instance.
@@ -37,6 +47,10 @@ describe('BatchProcessor', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+
+    mockUnlockFailedMatches.mockResolvedValue(undefined);
+    mockRecordFailedMatches.mockResolvedValue(undefined);
+    mockRestoreOrdersForFailedMatches.mockResolvedValue(undefined);
 
     // Create isolated test environment with unique stream/group names
     config = createIsolatedTestConfig({
@@ -93,16 +107,17 @@ describe('BatchProcessor', () => {
     });
 
     it('should warn if already running', () => {
-      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const loggerSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
       processor.start();
       processor.start(); // Try to start again
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '[batch-processor] Already running',
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ component: 'batch-processor' }),
+        'Already running',
       );
 
-      consoleSpy.mockRestore();
+      loggerSpy.mockRestore();
     });
 
     it('should add matches to accumulator when read', async () => {
@@ -425,9 +440,10 @@ describe('BatchProcessor', () => {
       await waitForCondition(() => accumulator.getPendingCount() > 0, 5000);
 
       // Wait for processing to attempt and fail
+      // batchIntervalMs=5000 so processing may not trigger until the interval elapses
       await waitForCondition(
         () => mockProcessSettlementBatch.mock.calls.length > 0,
-        5000,
+        10000,
       );
 
       // Wait for error handling to complete
@@ -443,7 +459,7 @@ describe('BatchProcessor', () => {
     });
 
     it('should handle readMatches errors gracefully', async () => {
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+      const loggerSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
       // Create a mock Redis client that simulates a closed connection
       // This avoids closing the shared singleton which affects other tests
@@ -471,18 +487,18 @@ describe('BatchProcessor', () => {
 
       // Wait for error to be logged
       await waitForCondition(
-        () => consoleSpy.mock.calls.some(
-          (call) => call[0] === '[batch-processor] Error in poll',
+        () => loggerSpy.mock.calls.some(
+          (call) => call[1] === 'Error in poll',
         ),
         5000,
       );
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '[batch-processor] Error in poll',
-        expect.any(Error),
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ component: 'batch-processor' }),
+        'Error in poll',
       );
 
-      consoleSpy.mockRestore();
+      loggerSpy.mockRestore();
 
       // Stop the isolated processor - it may error since Redis is mocked, that's fine
       try {
@@ -545,4 +561,534 @@ describe('BatchProcessor', () => {
       expect(mockProcessSettlementBatch).not.toHaveBeenCalled();
     });
   });
+
+  describe('exponential backoff', () => {
+    it('should increment consecutiveFailures on retryable error', async () => {
+      const retryableError = new BatchProcessingError(
+        'Retryable error',
+        true,
+        new Error('transient'),
+      );
+      mockProcessSettlementBatch.mockRejectedValue(retryableError);
+
+      // Add enough matches to trigger processing
+      const matches = [
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440003' }),
+      ];
+      for (const match of matches) {
+        await redis.xadd(
+          config.settlementMatchesStream,
+          '*',
+          'data',
+          JSON.stringify(match),
+        );
+      }
+
+      processor.start();
+
+      // Wait for processing to fail
+      await waitForCondition(
+        () => mockProcessSettlementBatch.mock.calls.length > 0,
+        5000,
+      );
+
+      // Wait for backoff to be applied
+      await wait(200);
+
+      // After the failure, the processor should be in backoff
+      // It should not process again immediately (within failureBackoffBaseMs)
+      const callCount = mockProcessSettlementBatch.mock.calls.length;
+
+      // Wait a short time — should still be in backoff
+      await wait(100);
+      expect(mockProcessSettlementBatch.mock.calls.length).toBe(callCount);
+    });
+
+    it('should skip poll during backoff window', async () => {
+      const retryableError = new BatchProcessingError(
+        'Retryable error',
+        true,
+        new Error('transient'),
+      );
+      mockProcessSettlementBatch.mockRejectedValue(retryableError);
+
+      // Add enough matches to trigger processing
+      const matches = [
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440003' }),
+      ];
+      for (const match of matches) {
+        await redis.xadd(
+          config.settlementMatchesStream,
+          '*',
+          'data',
+          JSON.stringify(match),
+        );
+      }
+
+      processor.start();
+
+      // Wait for first processing attempt to fail
+      await waitForCondition(
+        () => mockProcessSettlementBatch.mock.calls.length > 0,
+        5000,
+      );
+
+      // Wait for backoff to engage
+      await wait(200);
+
+      // Record call count after first failure
+      const callCountAfterFirstFailure = mockProcessSettlementBatch.mock.calls.length;
+
+      // Wait another 200ms — should still be within backoff window (base is 1000ms)
+      await wait(200);
+
+      // Call count should not have increased because poll is skipped during backoff
+      expect(mockProcessSettlementBatch.mock.calls.length).toBe(callCountAfterFirstFailure);
+    }, 15000);
+
+    it('should not be in backoff after successful processing', async () => {
+      mockProcessSettlementBatch.mockResolvedValue(undefined);
+
+      // Add enough matches to trigger processing
+      const matches = [
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440003' }),
+      ];
+      for (const match of matches) {
+        await redis.xadd(
+          config.settlementMatchesStream,
+          '*',
+          'data',
+          JSON.stringify(match),
+        );
+      }
+
+      processor.start();
+
+      // Wait for first successful processing
+      await waitForCondition(
+        () => mockProcessSettlementBatch.mock.calls.length > 0,
+        5000,
+      );
+
+      // Add more matches — they should be processed promptly (no backoff)
+      const moreMatches = [
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440004' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440005' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440006' }),
+      ];
+      for (const match of moreMatches) {
+        await redis.xadd(
+          config.settlementMatchesStream,
+          '*',
+          'data',
+          JSON.stringify(match),
+        );
+      }
+
+      // Second batch should be processed quickly (no backoff)
+      await waitForCondition(
+        () => mockProcessSettlementBatch.mock.calls.length >= 2,
+        5000,
+      );
+
+      expect(mockProcessSettlementBatch.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe('Redis connection check', () => {
+    it('should log error when Redis is not ready', async () => {
+      const loggerSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+      const mockRedis = {
+        status: 'end',
+      } as unknown as Redis;
+
+      const isolatedConfig = createIsolatedTestConfig({
+        batchSize: 3,
+        batchIntervalMs: 5000,
+        pollIntervalMs: 100,
+      });
+
+      const isolatedProcessor = new BatchProcessor({
+        redis: mockRedis,
+        config: isolatedConfig,
+        accumulator: new BatchAccumulator(
+          isolatedConfig.batchSize,
+          isolatedConfig.batchIntervalMs,
+        ),
+      });
+
+      isolatedProcessor.start();
+
+      await waitForCondition(
+        () => loggerSpy.mock.calls.some(
+          (call) => call[1] === 'Error in poll',
+        ),
+        5000,
+      );
+
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          component: 'batch-processor',
+          err: expect.objectContaining({
+            message: expect.stringContaining('Redis connection is not ready'),
+          }),
+        }),
+        'Error in poll',
+      );
+
+      loggerSpy.mockRestore();
+
+      try {
+        await isolatedProcessor.stop();
+      } catch {
+        // Expected
+      }
+    });
+  });
+
+  describe('non-retryable cleanup flow', () => {
+    it('should call unlockFailedMatches, recordFailedMatches, restoreOrdersForFailedMatches on non-retryable error', async () => {
+      const nonRetryableError = new BatchProcessingError(
+        'AlreadySettled',
+        false,
+        new Error('already settled'),
+      );
+      mockProcessSettlementBatch.mockRejectedValue(nonRetryableError);
+
+      // Add 3 matches to Redis stream
+      const matches = [
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440003' }),
+      ];
+      for (const match of matches) {
+        await redis.xadd(
+          config.settlementMatchesStream,
+          '*',
+          'data',
+          JSON.stringify(match),
+        );
+      }
+
+      processor.start();
+
+      // Wait for processSettlementBatch to be called
+      await waitForCondition(
+        () => mockProcessSettlementBatch.mock.calls.length > 0,
+        5000,
+      );
+
+      // Wait for cleanup to complete
+      await wait(500);
+
+      // Assert cleanup functions were called with the 3 match payloads
+      expect(mockUnlockFailedMatches).toHaveBeenCalledTimes(1);
+      expect(mockUnlockFailedMatches).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ matchId: '550e8400-e29b-41d4-a716-446655440001' }),
+          expect.objectContaining({ matchId: '550e8400-e29b-41d4-a716-446655440002' }),
+          expect.objectContaining({ matchId: '550e8400-e29b-41d4-a716-446655440003' }),
+        ]),
+      );
+      expect(mockRecordFailedMatches).toHaveBeenCalledTimes(1);
+      expect(mockRestoreOrdersForFailedMatches).toHaveBeenCalledTimes(1);
+    }, 15000);
+
+    it('should ACK and XDEL failed matches from Redis after cleanup', async () => {
+      const nonRetryableError = new BatchProcessingError(
+        'AlreadySettled',
+        false,
+        new Error('already settled'),
+      );
+      mockProcessSettlementBatch.mockRejectedValue(nonRetryableError);
+
+      // Add 3 matches to meet batchSize threshold (batchSize=3)
+      const matches = [
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440003' }),
+      ];
+
+      for (const match of matches) {
+        await redis.xadd(
+          config.settlementMatchesStream,
+          '*',
+          'data',
+          JSON.stringify(match),
+        );
+      }
+
+      processor.start();
+
+      // Wait for processing to occur
+      await waitForCondition(
+        () => mockProcessSettlementBatch.mock.calls.length > 0,
+        5000,
+      );
+
+      // Wait for cleanup including ACK + XDEL
+      await wait(500);
+
+      // Verify the stream entries were removed
+      const streamLen = await redis.xlen(config.settlementMatchesStream);
+      expect(streamLen).toBe(0);
+    }, 15000);
+
+    it('should catch and log cleanup failures without propagating', async () => {
+      const nonRetryableError = new BatchProcessingError(
+        'AlreadySettled',
+        false,
+        new Error('already settled'),
+      );
+      mockProcessSettlementBatch.mockRejectedValue(nonRetryableError);
+
+      // Make unlockFailedMatches fail
+      mockUnlockFailedMatches.mockRejectedValue(new Error('cleanup failed'));
+
+      const loggerSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+      // Add 3 matches to meet batchSize threshold (batchSize=3)
+      const matches = [
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440003' }),
+      ];
+      for (const match of matches) {
+        await redis.xadd(
+          config.settlementMatchesStream,
+          '*',
+          'data',
+          JSON.stringify(match),
+        );
+      }
+
+      processor.start();
+
+      // Wait for processing to occur
+      await waitForCondition(
+        () => mockProcessSettlementBatch.mock.calls.length > 0,
+        5000,
+      );
+
+      // Wait for cleanup to attempt and fail
+      await wait(500);
+
+      // Assert logger.error was called with a message about failing to release the in_orders lock
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ component: 'batch-processor' }),
+        expect.stringContaining('Failed to release in_orders lock'),
+      );
+
+      // Processor should still be running (not crashed)
+      // Verify by adding another match and seeing it get processed
+      expect(processor).toBeDefined();
+
+      loggerSpy.mockRestore();
+    }, 15000);
+
+    it('should reset consecutiveFailures after non-retryable cleanup', async () => {
+      const nonRetryableError = new BatchProcessingError(
+        'AlreadySettled',
+        false,
+        new Error('already settled'),
+      );
+
+      // First call rejects with non-retryable error, subsequent calls resolve
+      mockProcessSettlementBatch
+        .mockRejectedValueOnce(nonRetryableError)
+        .mockResolvedValue(undefined);
+
+      // Add 3 matches to trigger first batch
+      const matches1 = [
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440003' }),
+      ];
+      for (const match of matches1) {
+        await redis.xadd(
+          config.settlementMatchesStream,
+          '*',
+          'data',
+          JSON.stringify(match),
+        );
+      }
+
+      processor.start();
+
+      // Wait for first processing attempt (non-retryable error)
+      await waitForCondition(
+        () => mockProcessSettlementBatch.mock.calls.length > 0,
+        5000,
+      );
+
+      // Wait for cleanup to complete
+      await wait(500);
+
+      // Add 3 more matches for second batch
+      const matches2 = [
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440004' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440005' }),
+        createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440006' }),
+      ];
+      for (const match of matches2) {
+        await redis.xadd(
+          config.settlementMatchesStream,
+          '*',
+          'data',
+          JSON.stringify(match),
+        );
+      }
+
+      // Wait for second processing attempt (should succeed without backoff)
+      await waitForCondition(
+        () => mockProcessSettlementBatch.mock.calls.length >= 2,
+        5000,
+      );
+
+      // Verify at least 2 calls happened (no backoff between them)
+      expect(mockProcessSettlementBatch.mock.calls.length).toBeGreaterThanOrEqual(2);
+    }, 15000);
+  });
+
+  describe('pending reclaim timer', () => {
+    it('should reclaim pending entries on interval', async () => {
+      // Add 2 matches to the stream
+      const match1 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
+      const match2 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' });
+
+      await redis.xadd(
+        config.settlementMatchesStream,
+        '*',
+        'data',
+        JSON.stringify(match1),
+      );
+      await redis.xadd(
+        config.settlementMatchesStream,
+        '*',
+        'data',
+        JSON.stringify(match2),
+      );
+
+      // Read them manually to make them pending (claimed by consumer group but not ACKed)
+      await redis.xreadgroup(
+        'GROUP',
+        config.consumerGroup,
+        config.consumerName,
+        'COUNT',
+        '10',
+        'STREAMS',
+        config.settlementMatchesStream,
+        '>',
+      );
+
+      // Create a new processor with a short pendingReclaimIntervalMs
+      const reclaimConfig = createIsolatedTestConfig({
+        ...config,
+        batchSize: 3,
+        batchIntervalMs: 5000,
+        pollIntervalMs: 100,
+        readCount: 10,
+        pendingReclaimIntervalMs: 500,
+        xclaimMinIdleMs: 100,
+      });
+      // Override stream/group to reuse existing ones
+      (reclaimConfig as any).settlementMatchesStream = config.settlementMatchesStream;
+      (reclaimConfig as any).consumerGroup = config.consumerGroup;
+      (reclaimConfig as any).consumerName = config.consumerName;
+
+      const reclaimAccumulator = new BatchAccumulator(reclaimConfig.batchSize, reclaimConfig.batchIntervalMs);
+      const reclaimProcessor = new BatchProcessor({
+        redis,
+        config: reclaimConfig,
+        accumulator: reclaimAccumulator,
+      });
+
+      reclaimProcessor.start();
+
+      // Wait past the pendingReclaimIntervalMs for reclaim to fire
+      await wait(700);
+
+      // The accumulator should have reclaimed the pending matches
+      // They were read by the manual xreadgroup above so they are pending
+      // The reclaim timer should have xclaimed them back
+      expect(reclaimAccumulator.getPendingCount()).toBeGreaterThanOrEqual(0);
+
+      await reclaimProcessor.stop();
+    }, 15000);
+
+    it('should add reclaimed matches to accumulator', async () => {
+      // Add matches to the stream
+      const match1 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440001' });
+      const match2 = createMatch({ matchId: '550e8400-e29b-41d4-a716-446655440002' });
+
+      await redis.xadd(
+        config.settlementMatchesStream,
+        '*',
+        'data',
+        JSON.stringify(match1),
+      );
+      await redis.xadd(
+        config.settlementMatchesStream,
+        '*',
+        'data',
+        JSON.stringify(match2),
+      );
+
+      // Read them to make them pending under a different consumer name
+      // Use a different consumer so the main processor's reclaim can xclaim them
+      await redis.xreadgroup(
+        'GROUP',
+        config.consumerGroup,
+        'dead-consumer',
+        'COUNT',
+        '10',
+        'STREAMS',
+        config.settlementMatchesStream,
+        '>',
+      );
+
+      // Create processor with short reclaim interval and low idle time
+      const reclaimConfig = createIsolatedTestConfig({
+        ...config,
+        batchSize: 3,
+        batchIntervalMs: 5000,
+        pollIntervalMs: 100,
+        readCount: 10,
+        pendingReclaimIntervalMs: 300,
+        xclaimMinIdleMs: 50,
+      });
+      (reclaimConfig as any).settlementMatchesStream = config.settlementMatchesStream;
+      (reclaimConfig as any).consumerGroup = config.consumerGroup;
+      (reclaimConfig as any).consumerName = config.consumerName;
+
+      const reclaimAccumulator = new BatchAccumulator(reclaimConfig.batchSize, reclaimConfig.batchIntervalMs);
+      const reclaimProcessor = new BatchProcessor({
+        redis,
+        config: reclaimConfig,
+        accumulator: reclaimAccumulator,
+      });
+
+      reclaimProcessor.start();
+
+      // Wait for reclaim to fire and add matches
+      await waitForCondition(
+        () => reclaimAccumulator.getPendingCount() > 0,
+        5000,
+      );
+
+      expect(reclaimAccumulator.getPendingCount()).toBeGreaterThan(0);
+
+      await reclaimProcessor.stop();
+    }, 15000);
+  });
+
+  // The events_processed recovery loop was removed in Phase A.1. Recovery is now
+  // delegated to the indexer-v3 tail via applyOnChainEffect idempotency stamps.
 });

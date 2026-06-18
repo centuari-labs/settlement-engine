@@ -11,6 +11,10 @@ import { matchSchema } from '../../schemas/match';
 export const createMatch = (overrides?: Partial<Match>): Match => {
   const defaults: Match = {
     matchId: '550e8400-e29b-41d4-a716-446655440000',
+    // bytes32 on-chain market key (C4): the matching engine identifies markets by
+    // the bytes32 the contract uses as its storage key, not a UUID.
+    marketId:
+      '0x660e8400e29b41d4a716446655440099000000000000000000000000000000aa',
     lendOrderId: '550e8400-e29b-41d4-a716-446655440001',
     borrowOrderId: '550e8400-e29b-41d4-a716-446655440002',
     lenderWallet: '0x1234567890123456789012345678901234567890',
@@ -18,13 +22,18 @@ export const createMatch = (overrides?: Partial<Match>): Match => {
     matchedAmount: '1000000',
     rate: 5000,
     loanToken: '0x1111111111111111111111111111111111111111',
-    maturity: 1735689600,
+    // Far-future maturity (2099-01-01) — schema now requires a future
+    // unix-seconds maturity (M4), so a fixed future constant keeps fixtures
+    // deterministic without ever drifting into the past.
+    maturity: 4070908800,
     timestamp: 1704067200,
     borrowerIsTaker: true,
-    makerFeeAmount: '0',
-    takerFeeAmount: '0',
-    lenderSettlementFee: '0',
-    borrowerSettlementFee: '0',
+    // Fee/amount digit fields must now be positive integers (no '0') per the
+    // tightened schema (M3). Use a representative non-zero default.
+    makerFeeAmount: '1000',
+    takerFeeAmount: '1000',
+    lenderSettlementFeeAmount: '1000',
+    borrowerSettlementFeeAmount: '1000',
   };
 
   const match = { ...defaults, ...overrides };
@@ -34,6 +43,7 @@ export const createMatch = (overrides?: Partial<Match>): Match => {
 
 /**
  * Creates a MatchWithMeta object with default values.
+ * Each call generates a unique stream entry id unless overridden.
  *
  * @param matchOverrides - Optional fields to override in the match payload.
  * @param metaOverrides - Optional fields to override in the meta information.
@@ -44,8 +54,9 @@ export const createMatchWithMeta = (
   metaOverrides?: Partial<Omit<MatchWithMeta, 'payload'>>,
 ): MatchWithMeta => {
   const match = createMatch(matchOverrides);
+  const uniqueId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const defaults: Omit<MatchWithMeta, 'payload'> = {
-    id: '12345-0',
+    id: uniqueId,
     stream: 'settlement:matches',
   };
 

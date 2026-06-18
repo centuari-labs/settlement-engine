@@ -1,4 +1,11 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Load .env.contracts FIRST so its keys win over .env (dotenv default
+// behavior: only sets unset keys, so first-wins gives priority to the
+// auto-generated file synced from smart-contract-revamp/bin/sync-to-services.sh).
+dotenv.config({ path: path.resolve(__dirname, '..', '.env.contracts') });
+dotenv.config();
 
 import { loadConfig } from './config';
 import { getRedisClient, closeRedisClient } from './redis/client';
@@ -9,6 +16,10 @@ import {
 } from './redis/settlementMatchConsumer';
 import { BatchAccumulator } from './settlement/batchAccumulator';
 import { BatchProcessor } from './settlement/batchProcessor';
+import { createNonceManager } from './settlement/nonceManager';
+import { SettlementSweeper } from './settlement/settlementSweeper';
+import { createInvalidEntryHandler } from './redis/deadLetter';
+import { logger } from './logger';
 
 const main = async (): Promise<void> => {
   const config = loadConfig();
@@ -27,6 +38,9 @@ const main = async (): Promise<void> => {
     config.batchIntervalMs,
   );
 
+  // Dead-letter handler for schema-invalid stream entries (L5).
+  const onInvalid = createInvalidEntryHandler(redis);
+
   // Process pending entries on startup and add them to accumulator
   const readMatchesOptions: ReadMatchesOptions = {
     redis,
@@ -34,6 +48,9 @@ const main = async (): Promise<void> => {
     consumerGroup: config.consumerGroup,
     consumerName: config.consumerName,
     readCount: config.readCount,
+    maxEntries: config.batchSize * 3,
+    xclaimMinIdleMs: config.xclaimMinIdleMs,
+    onInvalid,
   };
 
   try {
@@ -42,55 +59,71 @@ const main = async (): Promise<void> => {
     );
     if (pendingMatches.length > 0) {
       accumulator.addMatches(pendingMatches);
-      // eslint-disable-next-line no-console
-      console.log(
-        `[settlement-engine] Processed ${pendingMatches.length} pending matches on startup`,
+      logger.info(
+        { component: 'settlement-engine', count: pendingMatches.length },
+        'Processed pending matches on startup',
       );
     }
   } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error(
-      '[settlement-engine] Error processing pending entries on startup',
-      error,
+    logger.error(
+      { component: 'settlement-engine', err: error },
+      'Error processing pending entries on startup',
     );
     // Continue anyway - pending entries will be reclaimed later
   }
+
+  // Create nonce manager for explicit nonce sequencing
+  const nonceManager = createNonceManager(redis, config);
 
   // Create and start batch processor
   const batchProcessor = new BatchProcessor({
     redis,
     config,
     accumulator,
+    nonceManager,
+    onInvalid,
   });
 
   batchProcessor.start();
 
-  // eslint-disable-next-line no-console
-  console.log(
-    '[settlement-engine] Started. Listening on stream:',
-    config.settlementMatchesStream,
-    'group:',
-    config.consumerGroup,
-    'consumer:',
-    config.consumerName,
-    'batch-size:',
-    config.batchSize,
-    'batch-interval-ms:',
-    config.batchIntervalMs,
+  // Stuck-PENDING settlement sweeper (Track C2) — flag-gated, off by default.
+  let sweeper: SettlementSweeper | null = null;
+  if (config.sweeperEnabled) {
+    sweeper = new SettlementSweeper({ config });
+    sweeper.start();
+  }
+
+  logger.info(
+    {
+      component: 'settlement-engine',
+      stream: config.settlementMatchesStream,
+      group: config.consumerGroup,
+      consumer: config.consumerName,
+      batchSize: config.batchSize,
+      batchIntervalMs: config.batchIntervalMs,
+      sweeperEnabled: config.sweeperEnabled,
+    },
+    'Started',
   );
 
   const shutdown = async (signal: string): Promise<void> => {
-    // eslint-disable-next-line no-console
-    console.log(`[settlement-engine] Received ${signal}, shutting down...`);
+    logger.info({ component: 'settlement-engine', signal }, 'Shutting down...');
+
+    // Stop the sweeper first (waits for any in-flight sweep).
+    if (sweeper) {
+      await sweeper.stop();
+    }
 
     // Stop batch processor (will process pending batches)
     await batchProcessor.stop();
 
+    // Release nonce manager lock
+    await nonceManager.destroy();
+
     // Close Redis connection
     await closeRedisClient();
 
-    // eslint-disable-next-line no-console
-    console.log('[settlement-engine] Shutdown complete');
+    logger.info({ component: 'settlement-engine' }, 'Shutdown complete');
     process.exit(0);
   };
 
@@ -103,7 +136,6 @@ const main = async (): Promise<void> => {
 };
 
 void main().catch((error) => {
-  // eslint-disable-next-line no-console
-  console.error('[settlement-engine] Fatal error during startup', error);
+  logger.error({ component: 'settlement-engine', err: error }, 'Fatal error during startup');
   process.exit(1);
 });
