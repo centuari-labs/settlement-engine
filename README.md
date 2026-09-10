@@ -6,7 +6,8 @@ them to the `Settlement` contract on Arbitrum Sepolia, and writes the resulting
 positions back to PostgreSQL — idempotently and with at-least-once delivery
 semantics.
 
-This is one of nine services in the Centuari system. For the big picture, see the
+This is one of Centuari's core worker services. For the public system map and
+current hub-only launch boundary, see the
 [umbrella README](https://github.com/centuari-labs/centuari).
 
 ---
@@ -61,7 +62,8 @@ Backpressure caps the queue at `batchSize × 5`; duplicates are dropped via a
 
 ## Settlement writeback & lock release
 
-After `Settlement.settle()` confirms on-chain, three writebacks run in order:
+After `Settlement.settleMatches()` confirms on-chain, three writebacks run in
+order:
 
 1. **Position rows** via per-event `applyOnChainEffect` — the upsert SQL comes
    from the shared
@@ -101,18 +103,58 @@ src/
 
 ## Getting started
 
+This repository currently depends on the shared effects package through the
+local `file:../on-chain-effects` dependency in `package.json`. Use a sibling
+checkout with this layout; `pnpm install` cannot resolve that dependency from a
+standalone clone:
+
+```
+Centuari-v2/
+├── on-chain-effects/
+└── settlement-engine/
+```
+
+The local `file:` dependency is different from the private GitHub Packages
+dependencies used by other services. It does not require a registry token, but
+the sibling checkout must exist at that exact relative path.
+
+Provide local PostgreSQL and Redis instances first; the public umbrella
+repository is documentation-only and does not ship a shared Compose stack.
+
 ```bash
-# from the umbrella repo: bring up infra first
-docker-compose up -d postgres redis nats
+# Create .env locally from the committed template, then set at least:
+cp .env.example .env
+# DATABASE_URL=postgresql://<user>:<password>@localhost:5432/<database>
+# REDIS_URL=redis://localhost:6379
+# ETHEREUM_RPC_URL=https://<arbitrum-sepolia-rpc>
+# ETHEREUM_CHAIN_ID=421614
+# SETTLEMENT_CONTRACT_ADDRESS=<deployed-settlement-proxy>
+# SETTLEMENT_PRIVATE_KEY=<64-hex-testnet-only-key>
+# Also set SWEEPER_ENABLED=false unless the recovery worker has been reviewed.
+# Keep .env out of version control and never put a real key in shell history.
+
+# Generate the contract address/ABI files from the contract repository.
+cd ../smart-contract-revamp
+./bin/sync-to-services.sh --network=arb-sepolia
+cd ../settlement-engine
 
 pnpm install
 pnpm run dev          # ts-node-dev --respawn --transpile-only
 ```
 
-Configure via `.env` (see `.env.example`): `REDIS_URL`, `DATABASE_URL`,
-`RPC_URL`, `SETTLEMENT_PRIVATE_KEY`, `SETTLEMENT_CONTRACT_ADDRESS`, plus the
-batch tuning vars above. Contract address/ABI are synced from the smart-contract
-repo's `bin/sync-to-services.sh`.
+Configure via the local `.env`: `REDIS_URL`, `DATABASE_URL`,
+`ETHEREUM_RPC_URL`, `ETHEREUM_CHAIN_ID`, `SETTLEMENT_PRIVATE_KEY`, and
+`SETTLEMENT_CONTRACT_ADDRESS`, plus the batch tuning vars above. Contract
+addresses and ABIs are synced from the smart-contract repository's
+`bin/sync-to-services.sh`; the generated `.env.contracts` file is ignored and
+must not be edited by hand. `ETHEREUM_RPC_URL` is the required variable; the
+older `RPC_URL` name is not read by this service.
+
+The `SWEEPER_ENABLED` option is `false` by default in code, although the
+committed `.env.example` opts in for an explicit recovery-worker example. Set
+it to `false` for a normal local start. Treat enabling the stuck-PENDING
+recovery worker as a separately reviewed operational change and use a testnet
+or otherwise approved environment.
 
 ## Commands
 
