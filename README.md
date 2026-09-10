@@ -3,7 +3,7 @@
 The on-chain settlement worker for the Centuari decentralized lending protocol.
 It consumes matched lend/borrow orders from a Redis stream, batches them, submits
 them to the `Settlement` contract on Arbitrum Sepolia, and writes the resulting
-positions back to PostgreSQL — idempotently and with at-least-once delivery
+positions back to PostgreSQL with idempotent writes and at-least-once delivery
 semantics.
 
 This is one of Centuari's core worker services. For the public system map and
@@ -23,7 +23,7 @@ current hub-only launch boundary, see the
   management, client caching, and retryable/non-retryable error classification.
 - **Writes back** lend/borrow positions and bond tokens, flips
   `matches.settlement_status` PENDING → SETTLED, and releases order locks
-  (`user_balance.in_orders` decrement) — all stamped for idempotency.
+  (`user_balance.in_orders` decrement). Every write is stamped for idempotency.
 
 ## Tech stack
 
@@ -53,8 +53,8 @@ flowchart TD
 
 Two triggers, whichever fires first:
 
-1. **Size** — queue reaches `SETTLEMENT_BATCH_SIZE` (default 10).
-2. **Time** — `SETTLEMENT_BATCH_INTERVAL_MS` elapses with ≥ 1 match (default 5000ms).
+1. **Size:** queue reaches `SETTLEMENT_BATCH_SIZE` (default 10).
+2. **Time:** `SETTLEMENT_BATCH_INTERVAL_MS` elapses with ≥ 1 match (default 5000ms).
 
 Backpressure caps the queue at `batchSize × 5`; duplicates are dropped via a
 `seenIds` set. The poll loop uses exponential backoff
@@ -65,14 +65,14 @@ Backpressure caps the queue at `batchSize × 5`; duplicates are dropped via a
 After `Settlement.settleMatches()` confirms on-chain, three writebacks run in
 order:
 
-1. **Position rows** via per-event `applyOnChainEffect` — the upsert SQL comes
+1. **Position rows:** per-event `applyOnChainEffect` uses upsert SQL from
    from the shared
    [`@centuari-labs/on-chain-effects`](https://github.com/centuari-labs/on-chain-effects)
    mutation functions, so it is identical *by construction* to the indexer tail
    and cannot drift.
-2. **Collateral-flag cleanup** — DELETE `pending_collateral_flags` rows matching
+2. **Collateral-flag cleanup:** DELETE `pending_collateral_flags` rows matching
    the receipt's `CollateralFlagSet` events.
-3. **Lock release** — for each settled match, a fresh transaction flips
+3. **Lock release:** for each settled match, a fresh transaction flips
    `matches.settlement_status` PENDING → SETTLED and decrements
    `user_balance.in_orders` for both sides by the exact decomposition the
    matching engine's db-writer added at match time.
@@ -81,7 +81,7 @@ The conditional `UPDATE … WHERE settlement_status = 'PENDING'` returns 0 rows 
 retry, so the `in_orders` decrements fire exactly once;
 `GREATEST(in_orders − decrement, 0)` guards against underflow. Each match's
 writeback is its own transaction, so a partial failure doesn't block the rest of
-the batch — settlement is already final on-chain, so retries are safe.
+the batch. Settlement is already final on-chain, so retries are safe.
 
 ## Project layout
 
@@ -174,7 +174,7 @@ pnpm run test:coverage      # with coverage (80% threshold)
   (those live in `smartContract.ts`).
 - **Retryable vs non-retryable** errors are always distinguished via
   `BatchProcessingError { retryable }`.
-- **Idempotent by upsert** — a match arriving twice never creates duplicate rows.
+- **Idempotent by upsert:** a match arriving twice never creates duplicate rows.
 - **Multicall** for batched `isSettled` checks; Viem clients cached by
   `chainId|rpcUrl`.
 - **Graceful shutdown** (SIGTERM/SIGINT): stop polling, finish the current batch,
